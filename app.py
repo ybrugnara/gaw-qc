@@ -364,8 +364,10 @@ app.layout = html.Div([
         html.Div([
             dcc.Upload(children=html.Button('Upload File'),
                 #children=html.Div(['Drag and Drop or ', html.A('Select Files')]),
-                id='upload-data')
-            ], style={'padding-left':'50px', 'margin-top':'25px', 'margin-bottom':'50px'}),
+                id='upload-data'),
+            html.Label([], id='upload-label',
+                       style={'font-size':'16px', 'font-family':'Arial', 'color':'red', 'padding-left':'10px'})
+            ], style={'display':'flex', 'padding-left':'50px', 'margin-top':'25px', 'margin-bottom':'50px'}),
         html.Hr()]),
         
     # Hourly plot
@@ -523,6 +525,7 @@ def update_variables(stat):
 
 @callback(Output('height-dropdown', 'options'),
           Output('height-dropdown', 'value'),
+          Output('upload-label', 'children'),
           Output('cams-switch-1', 'on'),
           Output('cams-switch-2', 'on'),
           Output('upload-data', 'contents'),
@@ -535,6 +538,7 @@ def update_heights(stat, par, hei):
         
     meta = read_series(inpath, stat)
     heights = np.sort(np.unique(meta['height'][meta['variable']==par]))
+    statname = metadata.loc[metadata['gaw_id']==stat, 'name']
     
     if hei in heights:
         val = hei
@@ -543,21 +547,29 @@ def update_heights(stat, par, hei):
     else:
         val = None
         
+    if val != None:
+        lbl = '<<< Please upload the data for ' + par.upper() + ' at ' + \
+            statname + ' (' + str(val) + ' m)'
+    else:
+        lbl = []
+        
     if par == 'co2':
         switch = False
     else:
         switch = True
     
-    return list(heights), val, switch, switch, None
+    return list(heights), val, lbl, switch, switch, None
 
 
 @callback(Output('input-data', 'data'),
+          Output('upload-label', 'children', allow_duplicate=True),
           Input('param-dropdown', 'value'),
           Input('station-dropdown', 'value'),
           Input('height-dropdown', 'value'),
           Input('timezone-dropdown', 'value'),
           Input('upload-data', 'contents'),
-          State('upload-data', 'filename'))
+          State('upload-data', 'filename'),
+          prevent_initial_call=True)
 def update_data(par, cod, hei, tz, content, filename):
     if (cod is None) | (par is None) | (hei is None) | (content is None):
         raise PreventUpdate
@@ -663,7 +675,7 @@ def update_data(par, cod, hei, tz, content, filename):
            score_train.to_json(date_format='iso', orient='index'),
            score_val.to_json(date_format='iso', orient='index')]  
     
-    return out
+    return out, []
 
 
 @callback(
