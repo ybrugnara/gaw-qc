@@ -331,15 +331,16 @@ def empty_plot(msg):
 app = Dash(__name__)
 
 metadata = read_meta(inpath)
+gaw_stations = metadata[['name','gaw_id']].set_index('gaw_id') \
+                 .sort_values(by='name').to_dict()['name']
 
 app.layout = html.Div([
     
     # Input form
     html.Div([
         html.Div([
-            dcc.Dropdown(metadata[['name','gaw_id']].set_index('gaw_id') \
-                             .sort_values(by='name').to_dict()['name'], 
-                         id='station-dropdown', placeholder='Select station',
+            dcc.Dropdown(gaw_stations, 
+                         id='station-dropdown', value='JFJ', #placeholder='Select station',
                          style={'font-size':'16px', 'font-family':'Arial'}),
             ], style={'width':'20%', 'padding-left':'50px', 'margin-bottom':'10px'}),
         html.Div([
@@ -357,7 +358,7 @@ app.layout = html.Div([
                           'UTC-01:00','UTC+01:00','UTC+02:00','UTC+03:00',
                           'UTC+04:00','UTC+05:00','UTC+06:00','UTC+07:00','UTC+08:00',
                           'UTC+09:00','UTC+10:00','UTC+11:00','UTC+12:00'],
-                         id='timezone-dropdown', placeholder='Select time zone',
+                         id='timezone-dropdown', value='UTC', #placeholder='Select time zone',
                          style={'font-size':'16px', 'font-family':'Arial'}),
                 ], style={'width':'10%', 'padding-left':'50px', 'margin-bottom':'10px'}),
         html.Div([
@@ -522,6 +523,8 @@ def update_variables(stat):
 
 @callback(Output('height-dropdown', 'options'),
           Output('height-dropdown', 'value'),
+          Output('cams-switch-1', 'on'),
+          Output('cams-switch-2', 'on'),
           Output('upload-data', 'contents'),
           Input('station-dropdown', 'value'),
           Input('param-dropdown', 'value'),
@@ -532,14 +535,20 @@ def update_heights(stat, par, hei):
         
     meta = read_series(inpath, stat)
     heights = np.sort(np.unique(meta['height'][meta['variable']==par]))
+    
     if hei in heights:
         val = hei
     elif len(heights) == 1:
         val = heights.item()
     else:
         val = None
+        
+    if par == 'co2':
+        switch = False
+    else:
+        switch = True
     
-    return list(heights), val, None
+    return list(heights), val, switch, switch, None
 
 
 @callback(Output('input-data', 'data'),
@@ -745,7 +754,7 @@ def update_figure_1(on, selected_q, input_data):
         df_exp['Prediction CAMS'] = y_pred
     
     # Flag data after CAMS
-    if on & (param!='co2'):
+    if on & (param != 'co2'):
         df_exp['Flag2'] = 0
         threshold_cum = thr0_cams + incr_cams*selected_q
         thr_cum_yellow = np.quantile(anom_score[:df_train.shape[0]].dropna(), 
@@ -777,7 +786,7 @@ def update_figure_1(on, selected_q, input_data):
     fig.add_trace(go.Scatter(x=df_exp.loc[i_red,'Time'], y=df_exp.loc[i_red,'Value'], mode='markers', 
                              marker_size=8, marker_color='red', name='Red flags', showlegend=True))
     # Plot CAMS
-    if on & (param!='co2'):
+    if on & (param != 'co2'):
         fig.add_trace(go.Scatter(x=y_pred.index, y=y_pred, mode='lines', 
                                  hoverinfo='skip', line_color='orange', 
                                  name='Prediction (CAMS)', showlegend=True))
@@ -801,6 +810,11 @@ def update_figure_1(on, selected_q, input_data):
                     last_pos = i_blocks[i+1]
                 time1 = t_flag + timedelta(hours=n)
                 fig.add_vrect(x0=t_flag, x1=time1, fillcolor='gold', opacity=0.3, line_width=0)
+    elif on & (param == 'co2'):
+        fig.add_annotation(x=0.5, xref='paper', y=1.07, yref='paper', 
+                           text='(CAMS data not available for CO2)', 
+                           font=dict(family='Arial',size=16,color='darkred'), 
+                           showarrow=False)
     
     # Add border
     fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
@@ -882,7 +896,7 @@ def update_figure_2(on, selected_trend, label_trend, max_length, input_data):
                                'Years used':int((length-mtp)/12),
                                'Trend':label_trend})
     df_exp_mon.loc[df_exp_mon['Time'].isin(flags.index), 'Flag'] = 1
-    if on & (param!='co2'):
+    if on & (param != 'co2'):
         df_exp_mon['Prediction CAMS'] = y_pred_mon
     
     # Plot
@@ -915,10 +929,15 @@ def update_figure_2(on, selected_trend, label_trend, max_length, input_data):
         fig.add_trace(go.Scatter(x=flags.index, y=flags[param], mode='markers',
                                  marker_color='red', marker_size=20, marker_symbol='circle-open', 
                                  marker_line_width=3, name='Flags', showlegend=True))
-    if on & (param!='co2'):
+    if on & (param != 'co2'):
         fig.add_trace(go.Scatter(x=y_pred_mon.index, y=y_pred_mon, mode='markers', 
                                  marker_color='royalblue', marker_size=8, marker_symbol='star', 
                                  name='Prediction (CAMS)', showlegend=True))
+    elif on & (param == 'co2'):
+        fig.add_annotation(x=0.5, xref='paper', y=1.07, yref='paper', 
+                           text='(CAMS data not available for CO2)', 
+                           font=dict(family='Arial',size=16,color='darkred'), 
+                           showarrow=False)
     # Add border
     fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
     fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
