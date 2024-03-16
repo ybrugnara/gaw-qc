@@ -579,7 +579,7 @@ def update_data(par, cod, hei, tz, content, filename):
     df_up.replace('"', '', regex=True, inplace=True) # get rid of quotes
     
     # Deal with time format
-    fmt = guess_datetime_format(df_up['Time'].iloc[0], dayfirst=True)
+    fmt = guess_datetime_format(df_up['Time'].iloc[0])
     try:
         df_up['Time'] = df_up['Time'].apply(datetime.strptime, args=(fmt,))
     except:
