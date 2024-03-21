@@ -134,7 +134,7 @@ def filter_data(df, res, thr_h, thr_m, w):
 
 
 def read_meta(db_file):
-    """ return the coordinates of the stations that have data
+    """ return the metadata of the stations that have data
     :param db_file: Path of database file
     :return: Data frame of metadata
     """
@@ -163,6 +163,52 @@ def read_series(db_file, gaw_id):
         names = [x[0] for x in cur.description]
         
     return pd.DataFrame(series, columns=names)
+
+
+def parse_data(content, filename, par, tz):
+    """ parse the data uploaded by the user
+    :param content: content of uploaded file (output of upload-data button)
+    :param filename: name of uploaded file (output of upload-data button)
+    :param par: variable code (output of param-dropdown)
+    :param tz: time zone (output of timezone-dropdown)
+    :return: Data frame of parsed data with time as index
+    """
+    content_type, content_string = content.split(',')
+    decoded = base64.b64decode(content_string)
+    try:
+        if (filename[-3:] == 'csv') | (filename[-3:] == 'txt'):
+            df_up = pd.read_csv(StringIO(decoded.decode('utf-8')), sep=None, 
+                                header=None, skiprows=1, usecols=[0,1], quoting=3,
+                                names=['Time',par], engine='python')
+        else:
+            df_up = pd.read_excel(BytesIO(decoded), header=None, skiprows=1,
+                                  usecols=[0,1], names=['Time',par])            
+    except:
+        print('Could not recognize file format')
+        return []
+    df_up.replace('"', '', regex=True, inplace=True) # get rid of quotes
+    
+    # Deal with time format
+    fmt = guess_datetime_format(df_up['Time'].iloc[0])
+    try:
+        df_up['Time'] = df_up['Time'].apply(datetime.strptime, args=(fmt,))
+    except:
+        print('Could not recognize time format')
+        return []
+    df_up['Time'] = df_up['Time'].dt.round('H') # round to nearest hour
+    if tz != 'UTC':
+        df_up['Time'] = to_utc(df_up['Time'], tz) # convert time to UTC
+    df_up.set_index('Time', inplace=True)
+    
+    # Deal with decimal separator and missing values
+    try:
+        df_up[par] = pd.to_numeric(df_up[par].replace(',', '.', regex=True))
+    except:
+        print('Could not convert data column to numeric')
+        return []
+    df_up.loc[df_up[par]<0, par] = np.nan # assign NaN to all negative values
+    
+    return df_up
 
 
 def to_utc(series, tz, reverse=False):
@@ -575,42 +621,9 @@ def update_data(par, cod, hei, tz, content, filename):
         raise PreventUpdate
         
     # Parse uploaded data
-    content_type, content_string = content.split(',')
-    decoded = base64.b64decode(content_string)
-    try:
-        if (filename[-3:] == 'csv') | (filename[-3:] == 'txt'):
-            df_up = pd.read_csv(StringIO(decoded.decode('utf-8')), sep=None, 
-                                header=None, skiprows=1, usecols=[0,1], quoting=3,
-                                names=['Time',par], engine='python')
-        else:
-            df_up = pd.read_excel(BytesIO(decoded), header=None, skiprows=1,
-                                  usecols=[0,1], names=['Time',par])            
-    except:
-        print('Could not recognize file format')
-        return []
-    df_up.replace('"', '', regex=True, inplace=True) # get rid of quotes
-    
-    # Deal with time format
-    fmt = guess_datetime_format(df_up['Time'].iloc[0])
-    try:
-        df_up['Time'] = df_up['Time'].apply(datetime.strptime, args=(fmt,))
-    except:
-        print('Could not recognize time format')
-        return []
-    df_up['Time'] = df_up['Time'].dt.round('H') # round to nearest hour
-    if tz != 'UTC':
-        df_up['Time'] = to_utc(df_up['Time'], tz) # convert time to UTC
-    df_up.set_index('Time', inplace=True)
+    df_up = parse_data(content, filename, par, tz)
     time0 = df_up.index[0]
     time1 = df_up.index[-1]
-    
-    # Deal with decimal separator and missing values
-    try:
-        df_up[par] = pd.to_numeric(df_up[par].replace(',', '.', regex=True))
-    except:
-        print('Could not convert data column to numeric')
-        return []
-    df_up.loc[df_up[par]<0, par] = np.nan # assign NaN to all negative values
     
     # Read data from database and remove values based on insufficient measurements
     df, res = read_data(inpath, cod, par, hei, time1)
@@ -629,7 +642,7 @@ def update_data(par, cod, hei, tz, content, filename):
         df.loc[df.index.isin(df_up.index), par] = df_up.loc[df_up.index.isin(df.index), par]
     df = df[df.index <= time1]
     
-    # Calculate monthly means
+    # Calculate monthly means of merged data
     if res == 'hourly':
         df_mon = df[[par]].groupby(pd.Grouper(freq='1M',label='left')).mean()      
         if df.index[0] > df_mon.index[1]: 
@@ -640,7 +653,7 @@ def update_data(par, cod, hei, tz, content, filename):
     else:
         df_mon = df[[par]].copy()
         
-    # Split into training and validation sets
+    # Split into training and 'validation' sets
     df_train = df[df.index < time0]
     df_val = df[df.index >= time0]
 
@@ -657,7 +670,7 @@ def update_data(par, cod, hei, tz, content, filename):
         if y_pred.index[0] > y_pred_mon.index[1]-timedelta(days=1): 
             y_pred_mon = y_pred_mon.iloc[1:] # exclude first month if it has less than one day of data
 
-    # Apply Sub-LOF on training and validation periods
+    # Apply Sub-LOF on training and 'validation' periods
     if res == 'hourly':
         score_train = run_sublof(df_train[par], subLOF, window_size)
         score_val = run_sublof(df_val[par], subLOF, window_size)
