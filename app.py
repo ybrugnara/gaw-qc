@@ -332,21 +332,19 @@ def downscaling(df_train, df_val, par, w):
                                n_jobs=-1, max_depth=15, max_samples=None, 
                                max_features=6, min_samples_leaf=40, random_state=42)
     df_train_cams = df_train.dropna()
-    df_val_cams = df_val[df_val[par+'_cams'].notna()]
+    df_val_cams = df_val.drop(par,axis=1).dropna()
     RF.fit(df_train_cams.drop(par,axis=1).to_numpy(), df_train_cams[par].to_numpy())
-    y_pred = RF.predict(df_val_cams.drop(par,axis=1).to_numpy())
+    y_pred = RF.predict(df_val_cams.to_numpy())
     y_pred = pd.Series(y_pred, index=df_val_cams.index).reindex(index=df_val.index)
     
-    # Monthly data (for SARIMA plot)
-    y_pred_mon = RF.predict(df_val_cams.drop(par,axis=1).to_numpy())
-    y_pred_mon = pd.Series(y_pred_mon, index=df_val_cams.index)
-    y_pred_mon = y_pred_mon.groupby(pd.Grouper(freq='1M',label='left')).mean()
+    # Monthly data (for SARIMA plot)  
+    y_pred_mon = y_pred.groupby(pd.Grouper(freq='1M',label='left')).mean()
     y_pred_mon.index = y_pred_mon.index + timedelta(days=1)
 
     # Anomaly score
-    y_pred_all = RF.predict(pd.concat([df_train_cams, df_val_cams]).drop(par,axis=1).to_numpy())
+    y_pred_all = RF.predict(pd.concat([df_train_cams.drop(par,axis=1), df_val_cams]).to_numpy())
     y_pred_all = pd.Series(y_pred_all, index=np.concatenate((df_train_cams.index,df_val_cams.index)))
-    errors = y_pred_all - pd.concat([df_train_cams, df_val_cams])[par]
+    errors = y_pred_all - pd.concat([df_train_cams[par], df_val.loc[df_val.index.isin(df_val_cams.index), par]])
     errors = errors.reindex(index=np.concatenate((df_train.index,df_val.index)))
     diff_series = errors - np.median(errors[:df_train.shape[0]].dropna())
     anom_score = diff_series.rolling(w, min_periods=int(w/2)).median()
