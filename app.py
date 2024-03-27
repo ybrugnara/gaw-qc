@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 import statsmodels.api as sm
 from pyod.models.lof import LOF
 from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import ExtraTreesRegressor
 import sqlite3
 import base64
 from io import StringIO, BytesIO
@@ -43,11 +43,16 @@ window_size_cams = 50
 # Threshold parameters (thr0 + incr * strictness level)
 thr0_lof = 0.994
 incr_lof = 0.002
-thr0_cams = 0.985
-incr_cams = 0.005
+thr0_cams = 0.97
+incr_cams = 0.01
 
 # Define Sub-LOF instance
 subLOF = LOF(n_neighbors=n_neighbors, metric='euclidean')
+
+# Define regression model
+ml_model = ExtraTreesRegressor(criterion='squared_error', n_estimators=200, 
+                               max_depth=15, max_features=6, 
+                               min_samples_leaf=40, random_state=42)
 
 
 
@@ -320,21 +325,19 @@ def debias(df_train, cams, par):
     return cams
 
 
-def downscaling(df_train, df_val, par, w):
+def downscaling(df_train, df_val, par, w, model):
     """ dowscaling algorithm for CAMS forecasts; the anomaly score is calculated as the moving median of the prediction error
     :param df_train: Data frame of training data (containing both measurements and CAMS data, with time as index)
     :param df_val: Same as df_train but for the target period
     :param par: Variable to debias (defines the column names)
     :param w: Size of the moving window used to calculate the anomaly score (integer)
+    :param model: Instance of a sklearn regression model
     :return: Series of downscaled data for the target period (hourly and monthly), series of the anomaly score
     """
-    RF = RandomForestRegressor(criterion='squared_error', n_estimators=200, 
-                               n_jobs=-1, max_depth=15, max_samples=None, 
-                               max_features=6, min_samples_leaf=40, random_state=42)
     df_train_cams = df_train.dropna()
     df_val_cams = df_val.drop(par,axis=1).dropna()
-    RF.fit(df_train_cams.drop(par,axis=1).to_numpy(), df_train_cams[par].to_numpy())
-    y_pred = RF.predict(df_val_cams.to_numpy())
+    model.fit(df_train_cams.drop(par,axis=1).to_numpy(), df_train_cams[par].to_numpy())
+    y_pred = model.predict(df_val_cams.to_numpy())
     y_pred = pd.Series(y_pred, index=df_val_cams.index).reindex(index=df_val.index)
     
     # Monthly data (for SARIMA plot)  
@@ -342,7 +345,7 @@ def downscaling(df_train, df_val, par, w):
     y_pred_mon.index = y_pred_mon.index + timedelta(days=1)
 
     # Anomaly score
-    y_pred_all = RF.predict(pd.concat([df_train_cams.drop(par,axis=1), df_val_cams]).to_numpy())
+    y_pred_all = model.predict(pd.concat([df_train_cams.drop(par,axis=1), df_val_cams]).to_numpy())
     y_pred_all = pd.Series(y_pred_all, index=np.concatenate((df_train_cams.index,df_val_cams.index)))
     errors = y_pred_all - pd.concat([df_train_cams[par], df_val.loc[df_val.index.isin(df_val_cams.index), par]])
     errors = errors.reindex(index=np.concatenate((df_train.index,df_val.index)))
@@ -663,7 +666,7 @@ def update_data(par, cod, hei, tz, content, filename):
         y_pred, anom_score = [empty_df, empty_df]
         y_pred_mon = debias(df_train, df_val[par+'_cams'], par)
     else:
-        y_pred, y_pred_mon, anom_score = downscaling(df_train, df_val, par, window_size_cams)
+        y_pred, y_pred_mon, anom_score = downscaling(df_train, df_val, par, window_size_cams, ml_model)
         y_pred_mon = y_pred_mon[y_pred_mon.index.isin(df_mon.index)]
         if y_pred.index[0] > y_pred_mon.index[1]-timedelta(days=1): 
             y_pred_mon = y_pred_mon.iloc[1:] # exclude first month if it has less than one day of data
