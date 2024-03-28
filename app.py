@@ -51,8 +51,8 @@ subLOF = LOF(n_neighbors=n_neighbors, metric='euclidean')
 
 # Define regression model
 ml_model = ExtraTreesRegressor(criterion='squared_error', n_estimators=200, 
-                               max_depth=15, max_features=6, 
-                               min_samples_leaf=40, random_state=42)
+                               max_depth=15, max_features=None, 
+                               min_samples_leaf=20, random_state=42)
 
 
 
