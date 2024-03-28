@@ -195,6 +195,11 @@ def parse_data(content, filename, par, tz):
     
     # Deal with time format
     fmt = guess_datetime_format(df_up['Time'].iloc[0])
+    if fmt[1] == 'm': # change mdy format to dmy
+        fmt = fmt.replace('d', 'm')
+        fmt = list(fmt)
+        fmt[1] = 'd'
+        fmt = ''.join(fmt)
     try:
         df_up['Time'] = df_up['Time'].apply(datetime.strptime, args=(fmt,))
     except:
