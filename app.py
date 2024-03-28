@@ -810,12 +810,7 @@ def update_figure_1(on, selected_q, input_data):
     fig = go.Figure(layout=go.Layout(width=1200, height=600))
     fig.add_trace(go.Scatter(x=df_val.index, y=df_val[param], mode='lines',
                              hoverinfo='skip', name='Measurements', showlegend=True))
-    i_yellow = (df_exp['Flag1'] == 1) & (df_exp['Flag2'] != 1)
-    i_red = (df_exp['Flag1'] + df_exp['Flag2'].fillna(0)) > 1
-    fig.add_trace(go.Scatter(x=df_exp.loc[i_yellow,'Time'], y=df_exp.loc[i_yellow,'Value'], mode='markers', 
-                             marker_size=8, marker_color='yellow', name='Yellow flags', showlegend=True))
-    fig.add_trace(go.Scatter(x=df_exp.loc[i_red,'Time'], y=df_exp.loc[i_red,'Value'], mode='markers', 
-                             marker_size=8, marker_color='red', name='Red flags', showlegend=True))
+
     # Plot CAMS
     if on & (param != 'co2'):
         fig.add_trace(go.Scatter(x=y_pred.index, y=y_pred, mode='lines', 
@@ -846,6 +841,14 @@ def update_figure_1(on, selected_q, input_data):
                            text='(CAMS data not available for CO2)', 
                            font=dict(family='Arial',size=16,color='darkred'), 
                            showarrow=False)
+        
+    # Plot flags
+    i_yellow = (df_exp['Flag1'] == 1) & (df_exp['Flag2'] != 1)
+    i_red = (df_exp['Flag1'] + df_exp['Flag2'].fillna(0)) > 1
+    fig.add_trace(go.Scatter(x=df_exp.loc[i_yellow,'Time'], y=df_exp.loc[i_yellow,'Value'], mode='markers', 
+                             marker_size=8, marker_color='yellow', name='Yellow flags', showlegend=True))
+    fig.add_trace(go.Scatter(x=df_exp.loc[i_red,'Time'], y=df_exp.loc[i_red,'Value'], mode='markers', 
+                             marker_size=8, marker_color='red', name='Red flags', showlegend=True))
     
     # Add border
     fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
