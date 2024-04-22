@@ -31,7 +31,7 @@ from io import StringIO, BytesIO
 inpath = 'test.db'
 
 # Sub-LOF parameters
-window_size = 6
+window_size = 5
 n_neighbors = 100
 
 # SARIMAX parameters
