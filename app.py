@@ -808,7 +808,7 @@ def update_figure_1(on, selected_q, input_data):
     
     # Plot time series
     fig = go.Figure(layout=go.Layout(width=1200, height=600))
-    fig.add_trace(go.Scatter(x=df_val.index, y=df_val[param], mode='lines',
+    fig.add_trace(go.Scatter(x=df_val.index, y=df_val[param], mode='lines', line_color='black',
                              hoverinfo='skip', name='Measurements', showlegend=True))
 
     # Plot CAMS
