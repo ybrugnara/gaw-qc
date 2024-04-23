@@ -208,6 +208,7 @@ def parse_data(content, filename, par, tz):
     df_up['Time'] = df_up['Time'].dt.round('H') # round to nearest hour
     if tz != 'UTC':
         df_up['Time'] = to_utc(df_up['Time'], tz) # convert time to UTC
+    df_up.sort_values(['Time'], inplace=True) # sort chronologically
     df_up.set_index('Time', inplace=True)
     
     # Deal with decimal separator and missing values
@@ -217,6 +218,19 @@ def parse_data(content, filename, par, tz):
         print('Could not convert data column to numeric')
         return []
     df_up.loc[df_up[par]<0, par] = np.nan # assign NaN to all negative values
+
+    # Limit to one year of data (retain most recent year)
+    leap_years = np.arange(1904, 2100, 4)
+    last_time = df_up.index[-1]
+    if ((last_time.year in leap_years) & (last_time.month > 2)) | \
+        ((last_time.year-1 in leap_years) & (last_time.month <= 2)) | \
+        ((last_time.year in leap_years) & (last_time.month == 2) & (last_time.day==29)):
+        n_max = 366
+    else:
+        n_max = 365
+    if (last_time-df_up.index[0]).days > n_max-1:
+        first_time = last_time - timedelta(days=n_max)
+        df_up = df_up[df_up.index > first_time]
     
     return df_up
 
