@@ -410,7 +410,7 @@ app.layout = html.Div([
                           'UTC-01:00','UTC+01:00','UTC+02:00','UTC+03:00',
                           'UTC+04:00','UTC+05:00','UTC+06:00','UTC+07:00','UTC+08:00',
                           'UTC+09:00','UTC+10:00','UTC+11:00','UTC+12:00'],
-                         id='timezone-dropdown', value='UTC', #placeholder='Select time zone',
+                         id='timezone-dropdown', value='UTC+01:00', #placeholder='Select time zone',
                          style={'font-size':'16px', 'font-family':'Arial'}),
                 ], style={'width':'10%', 'padding-left':'50px', 'margin-bottom':'10px'}),
         html.Div([
@@ -877,8 +877,9 @@ def update_figure_1(on, selected_q, input_data):
           Input('trend-radio', 'value'),
           Input('trend-radio', 'options'),
           Input('length-slider', 'value'),
+          Input('timezone-dropdown', 'value'),
           Input('input-data', 'data'))
-def update_figure_2(on, selected_trend, label_trend, max_length, input_data):
+def update_figure_2(on, selected_trend, label_trend, max_length, tz, input_data):
     if input_data == []:
         raise PreventUpdate
         
@@ -897,8 +898,13 @@ def update_figure_2(on, selected_trend, label_trend, max_length, input_data):
         str(df_val.index[-1])[:10].replace('-','') + '_' + \
         str(max_length) + '_' + label_trend.replace(' ','').lower() + '_monthly.csv'
     
-    # Extract the number of months included in the submitted period (months to predict)
-    mtp = len(df_val.index.month.unique())
+    # Count the number of months included in the submitted period (=months to predict)
+    if tz != 'UTC':
+        mtp = to_utc(df_val.index, tz, reverse=True).month.unique()
+        df_val = df_val[df_val.index.month.isin(mtp)]
+        mtp = len(mtp)
+    else:    
+        mtp = len(df_val.index.month.unique())
     
     # Extract period
     length = np.min([df_mon.shape[0], max_length*12 + mtp])
@@ -912,6 +918,7 @@ def update_figure_2(on, selected_trend, label_trend, max_length, input_data):
                                     seasonal_order=(0,1,1,12), 
                                     trend=selected_trend,
                                     enforce_stationarity=False).fit(disp=False)
+    
     # Make forecast
     fcst, confidence_int = forecast_sm(sar, mtp, p_conf, df_sar.index)
     
