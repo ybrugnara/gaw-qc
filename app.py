@@ -105,6 +105,7 @@ def read_data(db_file, gaw_id, v, h, last_time):
         raise Exception('CAMS data not found for this station')
     else:
         out_cams = pd.DataFrame(data_cams, columns=names_cams)
+        out_cams['value'].interpolate(inplace=True) # fill in missing values using linear interpolation
         out_cams.rename(columns={'value':v+'_cams', 'value_tc':'tc_'+v}, inplace=True)
         out_cams.drop(columns=['id','series_id'], inplace=True)
         out = pd.merge(out_gaw, out_cams, how='outer', on='time')
