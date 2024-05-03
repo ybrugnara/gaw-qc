@@ -196,16 +196,19 @@ def parse_data(content, filename, par, tz):
     
     # Deal with time format
     fmt = guess_datetime_format(df_up['Time'].iloc[0])
-    if fmt[1] == 'm': # change mdy format to dmy
-        fmt = fmt.replace('d', 'm')
-        fmt = list(fmt)
-        fmt[1] = 'd'
-        fmt = ''.join(fmt)
     try:
         df_up['Time'] = df_up['Time'].apply(datetime.strptime, args=(fmt,))
     except:
-        print('Could not recognize time format')
-        return []
+        try:
+            if fmt[1] == 'm': # change mdy format to dmy
+                fmt = fmt.replace('d', 'm')
+                fmt = list(fmt)
+                fmt[1] = 'd'
+                fmt = ''.join(fmt)
+            df_up['Time'] = df_up['Time'].apply(datetime.strptime, args=(fmt,))
+        except:
+            print('Could not recognize time format')
+            return []
     df_up['Time'] = df_up['Time'].dt.round('H') # round to nearest hour
     if tz != 'UTC':
         df_up['Time'] = to_utc(df_up['Time'], tz) # convert time to UTC
