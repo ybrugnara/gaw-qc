@@ -512,36 +512,62 @@ app.layout = html.Div([
                           'margin-left':'auto', 'margin-right':'auto'})
             ], style={'text-align':'center'}),
         html.Div([
-            dbc.Button('Data credits', id='open-credits', n_clicks=0, color='info', size='sm'),
-            dbc.Modal([
-                dbc.ModalHeader(dbc.ModalTitle('Data credits')),
-                dbc.ModalBody([
-                    html.P([
-                        html.B('Measurements of CH4, CO, and CO2 '),
-                        'are provided by the ',
-                        html.B('World Data Centre for Greenhouse Gases (WDCGG) '),
-                        'at JMA. Data users must follow the ',
-                        html.A('GAW data policy', 
-                               href='https://gaw.kishou.go.jp/policy/gaw', target='_blank'),
-                        '.'
-                        ]),
-                    html.P([
-                        html.B('Measurements of O3 '),
-                        'are provided by the ',
-                        html.B('World Data Centre for Reactive Gases (WDCRG) '),
-                        'at NILU. The data is licensed under a ',
-                        html.A('Creative Commons Attribution 4.0 International License', 
-                               href='http://creativecommons.org/licenses/by/4.0/', target='_blank'),
-                        '.'
-                        ]),
-                    html.P([
-                        'Some of the plots are generated using ',
-                        html.A('Copernicus Atmosphere Monitoring Service',
-                               href='https://atmosphere.copernicus.eu/', target='_blank'),
-                        ' information and/or contain modified Copernicus Atmosphere Monitoring Service information [2024].'
+            html.Div([
+                dbc.Button('Data credits', id='open-credits', n_clicks=0, color='info', size='sm'),
+                dbc.Modal([
+                    dbc.ModalHeader(dbc.ModalTitle('Data credits')),
+                    dbc.ModalBody([
+                        html.P([
+                            html.B('Measurements of CH4, CO, and CO2 '),
+                            'are provided by the ',
+                            html.B('World Data Centre for Greenhouse Gases (WDCGG) '),
+                            'at JMA. Data users must follow the ',
+                            html.A('GAW data policy', 
+                                   href='https://gaw.kishou.go.jp/policy/gaw', target='_blank'),
+                            '.'
+                            ]),
+                        html.P([
+                            html.B('Measurements of O3 '),
+                            'are provided by the ',
+                            html.B('World Data Centre for Reactive Gases (WDCRG) '),
+                            'at NILU. The data is licensed under a ',
+                            html.A('Creative Commons Attribution 4.0 International License', 
+                                   href='http://creativecommons.org/licenses/by/4.0/', target='_blank'),
+                            '.'
+                            ]),
+                        html.P([
+                            'Some of the plots are generated using ',
+                            html.A('Copernicus Atmosphere Monitoring Service',
+                                   href='https://atmosphere.copernicus.eu/', target='_blank'),
+                            ' information and/or contain modified Copernicus Atmosphere Monitoring Service information [2024].'
+                            ])
                         ])
-                    ])
-                ], id='modal-credits', size='lg', is_open=False),
+                    ], id='modal-credits', size='lg', is_open=False),
+                ]),
+            html.Div([
+                dbc.Button('Acknowledgments', id='open-acknowl', n_clicks=0, color='info', size='sm'),
+                dbc.Modal([
+                    dbc.ModalHeader(dbc.ModalTitle('Acknowledgments')),
+                    dbc.ModalBody([
+                        html.P([
+                            'This app was developed by the ',
+                            html.A('Quality Assurance / Scientific Activity Centre (QA/SAC) Switzerland',
+                                   href='https://www.empa.ch/web/s503/qa-sac-switzerland',
+                                   target='_blank'),
+                            ' at Empa, which is supported by the Federal Office of Meteorology MeteoSwiss',
+                            ' in the framework of the Global Atmosphere Watch Programme of the World Meteorological Organization.'
+                            ]),
+                        html.P([
+                            'Use of the output is free within the limits of the underlying data policies; ',
+                            'in any case, appropriate credit must be given to QA/SAC Switzerland.'
+                            ]),
+                        html.P([
+                            'For additional information please contact ',
+                            html.A('martin.steinbacher@empa.ch', href='mailto:martin.steinbacher@empa.ch')
+                            ]),
+                        ]),
+                    ], id='modal-acknowl', size='lg', is_open=False),                 
+                ], style={'padding-left':'25px'}),
             ], style={'display':'flex', 'margin-top':'25px', 
                       'align-items':'center', 'justify-content':'center'}),
         html.Div([
@@ -565,7 +591,7 @@ app.layout = html.Div([
             ], style={'display':'flex', 'margin-top':'25px', 
                       'align-items':'center', 'justify-content':'center'}),
         html.Div([
-            html.P(html.B('2. Select the period or upload your own data (hourly means)'))
+            html.P(html.B('2. Select a period to analyze or upload your own data (hourly means)'))
             ], style={'font-size':'20px', 'margin-top':'50px', 'text-align':'center'}),            
         html.Div([
             dcc.Loading(
@@ -987,6 +1013,16 @@ def toggle_credits(n, is_open):
     if n:
         return not is_open
     return is_open
+
+
+@app.callback(Output('modal-acknowl', 'is_open'),
+              [Input('open-acknowl', 'n_clicks')],
+              [State('modal-acknowl', 'is_open')])
+def toggle_acknowledgments(n, is_open):
+    if n:
+        return not is_open
+    return is_open
+
 
 @callback(Output('param-dropdown', 'options', allow_duplicate=True),
           Output('param-dropdown', 'value', allow_duplicate=True),
