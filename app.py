@@ -29,6 +29,7 @@ from sklearn.ensemble import ExtraTreesRegressor
 import sqlite3
 import base64
 from io import StringIO, BytesIO
+import glob
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -36,6 +37,9 @@ warnings.filterwarnings('ignore')
 
 # Path to database
 inpath = 'test.db'
+
+# Path to log file
+logpath = 'log.csv'
 
 # Minimum number of hourly values required to calculate monthly means
 n_min = 300
@@ -276,6 +280,19 @@ def to_utc(series, tz, reverse=False):
     elif tz[3] == '+':
         series = series - k*timedelta(hours=int(tz[4:6]), minutes=int(tz[7:9]))
     return series
+
+
+def write_log(log_file, row):
+    """ write log about user activity
+    :param db_file: Path of log file
+    :param row: Row to add to log (list)
+    :return: None
+    """
+    log = pd.DataFrame(dict(time=row[0], gaw_id=row[1], variable=row[2], height=row[3],
+                            start=row[4], end=row[5], upload=row[6]),
+                       index=[0])
+    h = True if len(glob.glob(log_file)) == 0 else False      
+    log.to_csv(log_file, header=h, index=False, mode='a', date_format='%Y-%m-%d')
 
 
 def aggregate_scores(scores, w_size): 
@@ -1212,6 +1229,11 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
         score_val = run_sublof(df_val[par], subLOF, window_size)
     else:
         score_train = score_val = pd.Series([])
+
+    # Write log
+    write_log(logpath, 
+              [datetime.isoformat(datetime.now(), sep=' ', timespec='seconds'),
+               cod, par, hei, time0, time1, int(is_new)])
     
     out = [par, cod, res, is_new,
            df.to_json(date_format='iso', orient='columns'),
