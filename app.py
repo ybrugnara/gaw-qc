@@ -502,13 +502,13 @@ metadata = read_meta(inpath)
 
 app.layout = html.Div([
     
-    # Intro and input form
+    # Intro
     html.Div([
         html.Div([
             html.Div([
                 html.Img(src='assets/Logo_Empa.png'),
                 html.Img(src='assets/wmo-gaw.png',
-                         style={'padding-left':'10%', 'width':'30%', 'height':'30%'})                  
+                         style={'padding-left':'125px', 'width':'400px'})                  
                 ], style={'display':'flex', 'align-items':'center', 'justify-content':'center',
                           'margin-bottom':'25px'}),
             html.Div([
@@ -525,8 +525,7 @@ app.layout = html.Div([
                     html.A('wiki', href='https://github.com/ybrugnara/gaw-qc/wiki', target='_blank'),
                     '.'
                     ])
-                ], style={'font-size':'16px', 'width':'800px', 'margin-top':'50px',
-                          'margin-left':'auto', 'margin-right':'auto'})
+                ], style={'font-size':'16px', 'margin-top':'50px'})
             ], style={'text-align':'center'}),
         html.Div([
             html.Div([
@@ -587,24 +586,28 @@ app.layout = html.Div([
                 ], style={'padding-left':'25px'}),
             ], style={'display':'flex', 'margin-top':'25px', 
                       'align-items':'center', 'justify-content':'center'}),
+        ], style={'width':'800px', 'margin-left':'auto', 'margin-right':'auto'}),
+                      
+    # Input form
+    html.Div([
         html.Div([
             html.Label(html.B('1. Select the station and gas'))
-            ], style={'text-align':'center', 'font-size':'20px', 'margin-top':'75px'}),
+            ], style={'text-align':'center', 'font-size':'20px'}),
         html.Div([
             html.Div([
                 dcc.Dropdown(metadata[['name','gaw_id']].set_index('gaw_id') \
                                  .sort_values(by='name').to_dict()['name'], 
                              id='station-dropdown', placeholder='Select station',
                              style={'font-size':'16px'})
-                ], style={'width':'12%'}),
+                ], style={'width':'200px'}),
             html.Div([
                 dcc.Dropdown(id='param-dropdown', placeholder='Select parameter',
                              style={'font-size':'16px'})
-                ], style={'width':'12%', 'padding-left':'2%'}),
+                ], style={'width':'200px', 'padding-left':'25px'}),
             html.Div([
                 dcc.Dropdown(id='height-dropdown', placeholder='Select height (m)',
                              style={'font-size':'16px'})
-                ], style={'width':'12%', 'padding-left':'2%'}),
+                ], style={'width':'200px', 'padding-left':'25px'}),
             ], style={'display':'flex', 'margin-top':'25px', 
                       'align-items':'center', 'justify-content':'center'}),
         html.Div([
@@ -648,7 +651,7 @@ app.layout = html.Div([
                    href='https://raw.githubusercontent.com/ybrugnara/gaw-qc/main/examples/Jungfraujoch_CO2_20240101-20240331.csv',
                    style={'padding-left':'3px'})
             ], style={'text-align':'center', 'margin-top':'10px', 'font-size':'12px'})
-    ], style={'margin-top':'50px'}),
+    ], className='menu'),
                   
     # Data loading with message
     html.Div([
@@ -658,8 +661,7 @@ app.layout = html.Div([
             id='loading-data',
             type='circle',
             fullscreen=False, 
-            children=dcc.Store(id='input-data', data=[], storage_type='memory'),
-            style={'margin-top':'50px'}
+            children=dcc.Store(id='input-data', data=[], storage_type='memory')
             )
         ], style={'text-align':'center', 'margin-top':'50px'}),
 
@@ -1011,11 +1013,11 @@ app.layout = html.Div([
                 ], style={'display':'flex', 'padding-left':'25px'})
             ], className='main', style={'display':'none'}, id='div-cycles')
         
-        ], style={'margin-top':'50px', 'margin-bottom':'50px'}),
+        ], style={'margin-top':'50px', 'margin-bottom':'25px'}),
     
     html.Div([
         html.A('Report bug', href='mailto:yuri.brugnara@empa.ch')
-        ], style={'text-align':'center', 'font-size':'12px', 'margin-bottom':'50px'})
+        ], style={'text-align':'center', 'font-size':'12px', 'margin-bottom':'25px'})
 
     ], style={'width':'1600px', 'margin-left':'auto', 'margin-right':'auto'})
 
@@ -1124,7 +1126,7 @@ def wait_message (cod, par, hei, date1, tz, content):
         return '', {'display':'none'}, 'auto'
     else:
         return 'Please wait - Dashboard is loading...', \
-            {'font-size':'18px', 'font-weight': 'bold'}, \
+            {'font-size':'18px', 'font-weight': 'bold', 'margin-bottom':'25px'}, \
             'hide'
 
 
@@ -1639,7 +1641,7 @@ def update_figure_2(points_on, cams_on, selected_trend, label_trend, max_length,
     else: # plot a point + error bars
         confidence_int['upper '+param] -= fcst
         fig.add_trace(go.Scatter(x=fcst.index, y=fcst, mode='markers',
-                                 marker_color='orange', marker_size=8,
+                                 marker_color='orange', marker_size=10,
                                  error_y=dict(type='data',visible=True,
                                               array=confidence_int['upper '+param]),
                                  name='SARIMA'))
