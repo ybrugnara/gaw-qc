@@ -196,7 +196,12 @@ def read_start_end(db_file, gaw_id, v, h):
         cur.execute('SELECT id FROM series WHERE ' + \
                         'gaw_id=? AND variable=? AND height=?', 
                     (gaw_id, v, h))
-        series_id = cur.fetchone()[0]
+        series_id = cur.fetchone()
+        
+        if series_id is None:
+            return (None, None)
+        
+        series_id = series_id[0]
         cur.execute('SELECT MIN(time),MAX(time) FROM gaw_hourly WHERE ' + \
                         'series_id=?', (series_id,))
         dates = cur.fetchall()[0]
@@ -1092,10 +1097,13 @@ def update_dates(cod, par, hei):
         raise PreventUpdate
         
     dates = read_start_end(inpath, cod, par.lower(), hei)
-    last_year = int(dates[1][:4])
+    
+    if dates[1] is None:
+        return None, None, None, 'hide'
     
     return datetime.strptime(dates[0], '%Y-%m-%d'), \
-        datetime.strptime(dates[1], '%Y-%m-%d'), date(last_year, 1, 1), 'auto'
+        datetime.strptime(dates[1], '%Y-%m-%d'), \
+        date(int(dates[1][:4]), 1, 1), 'auto'
         
         
 @callback(Output('timezone-dropdown', 'value', allow_duplicate=True),
