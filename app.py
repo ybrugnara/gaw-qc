@@ -146,13 +146,13 @@ def filter_data(df, res, thr_h, thr_m, w):
         running_max = df['n_meas'].rolling(w, min_periods=1, center=True).max()
         df.loc[df['n_meas']<thr_h*running_max, par] = np.nan
     else:
-        df.loc[df['n_meas']<thr_m, par] = np.nan
+        df.loc[(df['n_meas']>0) & (df['n_meas']<thr_m), par] = np.nan
         
     return df.drop(columns=['n_meas'])
 
 
 def read_meta(db_file):
-    """ return the coordinates of the stations that have data
+    """ return the metadata of the stations that have data
     :param db_file: Path of database file
     :return: Data frame of metadata
     """
@@ -1115,7 +1115,6 @@ def update_tz(tz, content):
           Input('station-dropdown', 'value'),
           Input('param-dropdown', 'value'),
           Input('height-dropdown', 'value'),
-          #Input('date-range', 'start_date'), # gives error if inputing both dates, so message will not appear when changing only start date
           Input('date-range', 'end_date'),
           Input('timezone-dropdown', 'value'),
           Input('upload-data', 'contents'),
