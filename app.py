@@ -370,21 +370,57 @@ def monthly_means(timeseries, n_min):
     return out
 
 
-def forecast_sm(model, n, pp, idx): 
-    """ make prediction using a SARIMA model
-    :param model: Instance of an already fitted SARIMA model
-    :param n: Number of time steps to predict
-    :param pp: Proability level to use for the confidence interval
-    :param idx: Time index of the full time series considered (including part to be predicted)
-    :return: Prediction and confidence interval series
+def shift_year(df, df_v):
+    """ Deal with periods spanning two calendar years by shifting the data before 01.01 by one year
+    :param df: Data frame with all historical data
+    :param df_v: Data frame with target period
+    :return: Data frame with all historical data and shifted year
     """
-    future_fcst = model.get_forecast(n)
-    conf = future_fcst.conf_int(alpha=pp)
-    conf.index = idx[-n:]
-    fore = future_fcst.predicted_mean
-    fore.index = idx[-n:]
+    lastj = df_v.index.dayofyear[-1]
+    if df_v.index.dayofyear[0] > lastj:
+        new_index = pd.Series(df.index)
+        new_index[df.index.dayofyear>lastj] = \
+            new_index[df.index.dayofyear>lastj] + timedelta(days=365)
+        df.set_index(new_index, inplace=True)
+        
+    return df
+
+
+def forecast_sm(df_m, n, max_l, sel_t): 
+    """ make prediction using a SARIMA model
+    :param df_m: Data frame with monthly data (one variable and time as index)
+    :param n: Number of time steps to predict
+    :param max_l: Maximum length in years of the training period
+    :param sel_t: Type of trend (character string)
+    :return: Four data frames with monthly data
+    """
+    # Extract periods and parameter name
+    length = np.min([df_m.shape[0], max_l*12 + n])
+    par = df_m.columns[0]
+    df_sar = df_m[par].iloc[-length:]
+    df_sar_to_predict = df_sar.iloc[-n:]
     
-    return fore, conf
+    # Define and fit SARIMA model
+    sar = sm.tsa.statespace.SARIMAX(df_sar[:-n], 
+                                    order=(1,0,0), 
+                                    seasonal_order=(0,1,1,12), 
+                                    trend=sel_t,
+                                    enforce_stationarity=False).fit(disp=False)
+    
+    # Make forecast
+    future_fcst = sar.get_forecast(n)
+    confidence_int = future_fcst.conf_int(alpha=p_conf)
+    confidence_int.index = df_sar.index[-n:]
+    fcst = future_fcst.predicted_mean
+    fcst.index = df_sar.index[-n:]
+    fcst = fcst.round(2)
+    confidence_int = confidence_int.round(2)
+    
+    # Flags
+    flags = df_sar_to_predict[(df_sar_to_predict > confidence_int['upper '+par]) | 
+                   (df_sar_to_predict < confidence_int['lower '+par])]
+  
+    return df_sar, fcst, confidence_int, flags
 
 
 def debias(df_train, cams, par):
@@ -408,33 +444,33 @@ def debias(df_train, cams, par):
     return cams
 
 
-def downscaling(df_train, df_val, par, w, model):
+def downscaling(df_train, df_test, par, w, model):
     """ dowscaling algorithm for CAMS forecasts; the anomaly score is calculated as the moving median of the prediction error
     :param df_train: Data frame of training data (containing both measurements and CAMS data, with time as index)
-    :param df_val: Same as df_train but for the target period
+    :param df_test: Same as df_train but for the target period
     :param par: Variable to debias (defines the column names)
     :param w: Size of the moving window used to calculate the anomaly score (integer)
     :param model: Instance of a sklearn regression model
     :return: Series of downscaled data for the target period (hourly and monthly), series of the anomaly score
     """
     df_train_cams = df_train.dropna()
-    df_val_cams = df_val.drop(par,axis=1).dropna()
+    df_test_cams = df_test.drop(par,axis=1).dropna()
     model.fit(df_train_cams.drop(par,axis=1).to_numpy(), df_train_cams[par].to_numpy())
-    y_pred = model.predict(df_val_cams.to_numpy())
-    y_pred = pd.Series(y_pred, index=df_val_cams.index).reindex(index=df_val.index)
+    y_pred = model.predict(df_test_cams.to_numpy())
+    y_pred = pd.Series(y_pred, index=df_test_cams.index).reindex(index=df_test.index)
     
     # Monthly data (for SARIMA plot)  
     y_pred_mon = y_pred.groupby(pd.Grouper(freq='1M',label='left')).mean()
     y_pred_mon.index = y_pred_mon.index + timedelta(days=1)
 
     # Anomaly score
-    x_to_predict = pd.concat([df_train_cams.drop(par,axis=1), df_val_cams]).sort_index()
+    x_to_predict = pd.concat([df_train_cams.drop(par,axis=1), df_test_cams]).sort_index()
     y_pred_all = model.predict(x_to_predict.to_numpy())
     y_pred_all = pd.Series(y_pred_all, index=x_to_predict.index)
     y_to_compare = pd.concat([df_train_cams[par], 
-                              df_val.loc[df_val.index.isin(df_val_cams.index), par]]).sort_index()
+                              df_test.loc[df_test.index.isin(df_test_cams.index), par]]).sort_index()
     errors = y_pred_all - y_to_compare
-    all_times = pd.concat([df_train, df_val]).sort_index().index
+    all_times = pd.concat([df_train, df_test]).sort_index().index
     errors = errors.reindex(index=all_times[~all_times.duplicated()])
     errors_train = errors[errors.index.isin(df_train_cams.index)]
     diff_series = errors - np.median(errors_train)
@@ -667,7 +703,9 @@ app.layout = html.Div([
             type='circle',
             fullscreen=False, 
             children=dcc.Store(id='input-data', data=[], storage_type='memory')
-            )
+            ),
+        dcc.Store(id='export-data-hourly', data=[], storage_type='memory'),
+        dcc.Store(id='export-data-monthly', data=[], storage_type='memory')
         ], style={'text-align':'center', 'margin-top':'50px'}),
 
     # Div containing all the plots
@@ -716,8 +754,8 @@ app.layout = html.Div([
                         )
                     ], style={'padding-left':'190px'}),
                 html.Div([
-                    dbc.Button('Export to CSV', id='btn_csv', size='sm'),
-                    dcc.Download(id='export-csv'),
+                    dbc.Button('Export to CSV', id='btn_csv_hourly', size='sm'),
+                    dcc.Download(id='export-csv-hourly')
                     ], style={'padding-left':'260px'}),
                 html.Div([
                     html.Label('Bin size', style={'font-size':'14px'}),
@@ -1182,8 +1220,8 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
             df_up = df_up[df_up.index >= time0]
     
     # Read data and remove values based on insufficient measurements
-    df, res = read_data(inpath, cod, par, hei)
-    df = filter_data(df, res, 0.25, 15, 5)
+    df_all, res = read_data(inpath, cod, par, hei)
+    df_all = filter_data(df_all, res, 0.25, 15, 5)
     
     # Calculate monthly means of uploaded data
     if (res == 'monthly') & (content != None):
@@ -1193,38 +1231,38 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
     # Merge uploaded data with historical data
     if content != None:
         if par == 'co2':
-            df = pd.concat([df, df_up])
-            df = df.groupby(df.index).last() # drop duplicated times (keep the last instance)
+            df_all = pd.concat([df_all, df_up])
+            df_all = df_all.groupby(df_all.index).last() # drop duplicated times (keep the last instance)
         else:
-            df.loc[df.index.isin(df_up.index), par] = df_up.loc[df_up.index.isin(df.index), par]
-        df = df[df.index <= time1]
+            df_all.loc[df_all.index.isin(df_up.index), par] = df_up.loc[df_up.index.isin(df_all.index), par]
+        df_all = df_all[df_all.index <= time1]
     
     # Calculate monthly means of merged data (require at least n_min measurements per month)
     if res == 'hourly':
-        df_mon = monthly_means(df[[par]], n_min)
+        df_mon = monthly_means(df_all[[par]], n_min)
         if par != 'co2':
-            df_mon[par+'_cams'] = monthly_means(df[[par+'_cams']], n_min)
+            df_mon[par+'_cams'] = monthly_means(df_all[[par+'_cams']], n_min)
     else:
-        df_mon = df[[par]].copy()
+        df_mon = df_all[[par]].copy()
         if par != 'co2':
-            df_mon[par+'_cams'] = df[par+'_cams']
+            df_mon[par+'_cams'] = df_all[par+'_cams']
         
-    # Define training and 'validation' sets
-    df_train = df.copy()
-    df_train.loc[(df.index >= time0) & (df.index < time1+timedelta(days=1)), par] = np.nan
-    df_val = df[(df.index >= time0) & (df.index < time1+timedelta(days=1))]
-    if df_val[par].notna().sum() == 0:
+    # Define training and test sets
+    df_test = df_all[(df_all.index >= time0) & (df_all.index < time1+timedelta(days=1))]
+    df_all.loc[df_all.index.isin(df_test.index), par] = np.nan
+    df_train = df_all
+    if df_test[par].count() == 0:
         return None, None, None, None
 
     # Downscale/debias CAMS
-    empty_df = df_val.drop(index=df_val.index)
+    empty_df = df_test.drop(index=df_test.index)
     if par == 'co2':        
         y_pred, y_pred_mon, anom_score = [empty_df, empty_df, empty_df]
     elif res == 'monthly':
         y_pred, anom_score = [empty_df, empty_df]
-        y_pred_mon = debias(df_train, df_val[par+'_cams'], par).round(2)
+        y_pred_mon = debias(df_train, df_test[par+'_cams'], par).round(2)
     else:
-        y_pred, y_pred_mon, anom_score = downscaling(df_train, df_val, par, window_size_cams, ml_model)
+        y_pred, y_pred_mon, anom_score = downscaling(df_train, df_test, par, window_size_cams, ml_model)
         y_pred_mon = y_pred_mon[y_pred_mon.index.isin(df_mon.index)]
         if y_pred_mon.shape[0] > 1:
             if y_pred.index[0] > y_pred_mon.index[1]-timedelta(days=1): 
@@ -1232,23 +1270,33 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
         y_pred = y_pred.round(2)
         y_pred_mon = y_pred_mon.round(2)
             
-    # Apply Sub-LOF on training and validation periods
+    # Apply Sub-LOF on training and test periods
     if res == 'hourly':
         score_train = run_sublof(df_train[par], subLOF, window_size)
-        score_val = run_sublof(df_val[par], subLOF, window_size)
+        score_val = run_sublof(df_test[par], subLOF, window_size)
     else:
         score_train = score_val = pd.Series([])
+    
+    # Prepare data for monthly plot
+    mtp = len(df_test.index.month.unique()) # months to predict
+    n_meas = df_test[par].groupby(pd.Grouper(freq='1M',label='left')).count()
+    n_meas.index = n_meas.index + timedelta(days=1)
+    df_monplot = df_mon[df_mon.index < df_test.index[-1]].copy() # exclude data after target period
+    n_meas = n_meas[n_meas.index < df_test.index[-1]]
+    df_monplot['n'] = np.nan
+    df_monplot.loc[df_monplot.index.isin(n_meas.index),'n'] = n_meas
 
     # Write log
     write_log(logpath, 
               [datetime.isoformat(datetime.now(), sep=' ', timespec='seconds'),
                cod, par, hei, time0, time1, int(is_new)])
     
-    out = [par, cod, res, is_new,
-           df.to_json(date_format='iso', orient='columns'),
+    test_cols = [par] if par == 'co2' else [par, par+'_cams']
+    out = [par, cod, res, is_new, mtp,
+           df_train[[par]].to_json(date_format='iso', orient='columns'),
+           df_test[test_cols].to_json(date_format='iso', orient='columns'),
            df_mon.to_json(date_format='iso', orient='columns'),
-           df_train.to_json(date_format='iso', orient='columns'),
-           df_val.to_json(date_format='iso', orient='columns'),
+           df_monplot.to_json(date_format='iso', orient='columns'),
            y_pred.to_json(date_format='iso', orient='index'),
            y_pred_mon.to_json(date_format='iso', orient='index'),
            anom_score.to_json(date_format='iso', orient='index'),
@@ -1258,63 +1306,12 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
     return out, None, None, None
 
 
-
-@callback(Output('export-csv', 'data'),
-          Input('btn_csv', 'n_clicks'),
-          prevent_initial_call=True)
-def export_csv(n_clicks):
-    if outfile == None:
-        raise PreventUpdate
-        
-    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False)
-
-
-@callback(Output('export-csv-monthly', 'data'),
-          Input('btn_csv_monthly', 'n_clicks'),
-          prevent_initial_call=True)
-def export_csv_monthly(n_clicks):
-    if outfile_monthly == None:
-        raise PreventUpdate
-        
-    return dcc.send_data_frame(df_exp_mon.to_csv, outfile_monthly, index=False)
-
-
-@callback(Output('export-csv-dc', 'data'),
-          Input('btn_csv_dc', 'n_clicks'),
-          prevent_initial_call=True)
-def export_csv_dc(n_clicks):
-    if outfile_dc == None:
-        raise PreventUpdate
-        
-    return dcc.send_data_frame(df_exp_dc.to_csv, outfile_dc, index=False)
-
-
-@callback(Output('export-csv-sc', 'data'),
-          Input('btn_csv_sc', 'n_clicks'),
-          prevent_initial_call=True)
-def export_csv_sc(n_clicks):
-    if outfile_sc == None:
-        raise PreventUpdate
-        
-    return dcc.send_data_frame(df_exp_sc.to_csv, outfile_sc, index=False)
-
-
-@callback(Output('export-csv-vc', 'data'),
-          Input('btn_csv_vc', 'n_clicks'),
-          prevent_initial_call=True)
-def export_csv_vc(n_clicks):
-    if outfile_vc == None:
-        raise PreventUpdate
-        
-    return dcc.send_data_frame(df_exp_vc.to_csv, outfile_vc, index=False)
-
-
-
 @callback(Output('graph-hourly', 'figure'),
           Output('div-switch', 'style'),
           Output('div-hourly', 'style'),
           Output('div-hourly-settings', 'style'),
           Output('div-hourly-info', 'style'),
+          Output('export-data-hourly', 'data'),
           Input('points-switch', 'on'),
           Input('cams-switch-1', 'on'),
           Input('threshold-slider', 'value'),
@@ -1323,102 +1320,72 @@ def export_csv_vc(n_clicks):
 def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
     if input_data == []:
         raise PreventUpdate
-        
-    global outfile
-    global df_exp
-        
+            
     if input_data is None:
-        outfile = None
         return empty_plot('No data available in the selected period - Try choosing a longer period'), \
             {'display':'none'}, {'display':'block'}, {'display':'none'}, {'display':'none'}
         
-    param, cod, res, is_new, df, df_mon, df_train, df_val, y_pred, \
-        y_pred_mon, anom_score, score_train, score_val = input_data
+    param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
         
     if res == 'monthly':
         return empty_plot('No hourly data available'), \
             {'display':'flex'}, {'display':'block'}, {'display':'none'}, {'display':'none'}
         
     df_train = pd.read_json(df_train, orient='columns')
-    df_val = pd.read_json(df_val, orient='columns')
+    df_test = pd.read_json(df_test, orient='columns')
     y_pred = pd.read_json(y_pred, orient='index', typ='series')
     anom_score = pd.read_json(anom_score, orient='index', typ='series')
     score_train = pd.read_json(score_train, orient='index')
     score_val = pd.read_json(score_val, orient='index')
     
-    # Define filename for export file
-    outfile = cod + '_' + param + '_' + \
-        str(df_val.index[0])[:10].replace('-','') + '-' + \
-        str(df_val.index[-1])[:10].replace('-','') + '_' + \
-        str(selected_q) + '_hourly.csv'
-    
     # Flag data after Sub-LOF
+    df_test['Flag LOF'] = 0
     threshold = thr0_lof+incr_lof*selected_q
     thr_yellow = np.quantile(score_train.dropna(), threshold)
     thr_red = thr_yellow * 2
-    flags_yellow = df_val[(score_val[0]>thr_yellow) & (score_val[0]<=thr_red)]
-    n_flags_yellow = flags_yellow.shape[0]
-    flags_red = df_val[score_val[0]>thr_red]
-    n_obs = df_val.shape[0]
+    flags_yellow = df_test[(score_val[0]>thr_yellow) & (score_val[0]<=thr_red)]
+    flags_red = df_test[score_val[0]>thr_red]
+    df_test.loc[df_test.index.isin(flags_yellow.index), 'Flag LOF'] = 1
     
     # Flag extreme outliers that exceed historical records by half the historical range (red flags only)
     half_range = (df_train[param].max() - df_train[param].min()) / 2
     thr_max = df_train[param].max() + half_range
     thr_min = df_train[param].min() - half_range
-    flags_red = pd.concat([flags_red, df_val[(df_val[param]>thr_max)|(df_val[param]<thr_min)]])
+    flags_red = pd.concat([flags_red, df_test[(df_test[param]>thr_max)|(df_test[param]<thr_min)]])
     flags_red = flags_red.groupby(flags_red.index).first() # drop duplicates
-    n_flags_red = flags_red.shape[0]
-    
-    # Create data frame for pie chart
-    df_pie = pd.DataFrame({'color':['green','yellow','red'],
-                           'name':['normal','anomalous','very anomalous'],
-                           'value':[n_obs-n_flags_red-n_flags_yellow, 
-                                    n_flags_yellow, n_flags_red]})
-    
-    # Create data frame for export
-    df_exp = pd.DataFrame({'Time':df_val.index, 
-                           'Value':df_val[param],
-                           'CAMS':np.nan,
-                           'CAMS + ML':np.nan,
-                           'Flag1':0, 
-                           'Flag2':np.nan,
-                           'Strictness':selected_q})
-    df_exp.loc[df_exp['Time'].isin(flags_yellow.index), 'Flag1'] = 1
-    df_exp.loc[df_exp['Time'].isin(flags_red.index), 'Flag1'] = 2
-    if cams_on & (param != 'co2'):
-        df_exp['CAMS'] = df_val[param+'_cams']
-        df_exp['CAMS + ML'] = y_pred
-    else:
-        df_exp.drop(columns=['CAMS','CAMS + ML','Flag2'], 
-                    inplace=True)
+    df_test.loc[df_test.index.isin(flags_red.index), 'Flag LOF'] = 2
     
     # Flag data after CAMS (yellow only; two yellow flags [LOF+CAMS] trigger a red flag)
     if cams_on & (param != 'co2'):
-        df_exp['Flag2'] = 0
+        df_test['Flag CAMS'] = 0
         threshold_cum = thr0_cams + incr_cams*selected_q
         anom_score_train = anom_score[anom_score.index.isin(df_train.dropna().index)]
         thr_cum_yellow = np.quantile(anom_score_train.dropna(), 
                                      [1-threshold_cum, threshold_cum]) * 2
-        anom_score_val = anom_score[anom_score.index.isin(df_val.index)]
+        anom_score_val = anom_score[anom_score.index.isin(df_test.index)]
         flags_cum_yellow = (anom_score_val < thr_cum_yellow[0]) | \
             (anom_score_val > thr_cum_yellow[1])
-        flags_cum_yellow = pd.Series(df_val.index[flags_cum_yellow])
+        flags_cum_yellow = pd.Series(df_test.index[flags_cum_yellow])
         for fl in flags_cum_yellow: # flags must be extended to the entire window used by cumulative_score
-            time0 = max(fl-timedelta(hours=window_size_cams-1), df_val.index[0])
+            time0 = max(fl-timedelta(hours=window_size_cams-1), df_test.index[0])
             additional_times = pd.Series(pd.date_range(time0, fl, freq='H'))
             flags_cum_yellow = pd.concat([flags_cum_yellow, additional_times], ignore_index=True)
         flags_cum_yellow.drop_duplicates(inplace=True)
         flags_cum_yellow.sort_values(inplace=True)
-        flags_cum_red = flags_cum_yellow[flags_cum_yellow.isin(flags_yellow.index)]
-        df_pie.loc[df_pie['color']=='red', 'value'] += len(flags_cum_red)
-        df_pie.loc[df_pie['color']=='yellow', 'value'] += (len(flags_cum_yellow) - len(flags_cum_red))
-        df_pie.loc[df_pie['color']=='green', 'value'] -= len(flags_cum_yellow)
-        df_exp.loc[df_exp['Time'].isin(flags_cum_yellow), 'Flag2'] = 1
-        i_yellow = (df_exp['Flag1'] == 1) & (df_exp['Flag2'] != 1)
-        i_red = (df_exp['Flag1'] + df_exp['Flag2']) > 1
+        df_test.loc[df_test.index.isin(flags_cum_yellow), 'Flag CAMS'] = 1
+        df_test.loc[df_test[param].isna(), 'Flag CAMS'] = 0
+        i_yellow = (df_test['Flag LOF'] == 1) & (df_test['Flag CAMS'] != 1)
+        i_red = (df_test['Flag LOF'] + df_test['Flag CAMS']) > 1
     else:
-        i_yellow = df_exp['Flag1'] == 1
-        i_red = df_exp['Flag1'] == 2
+        i_yellow = df_test['Flag LOF'] == 1
+        i_red = df_test['Flag LOF'] == 2
+    
+    # Create data frame for pie chart
+    df_pie = pd.DataFrame({'color':['green','yellow','red'],
+                           'name':['normal','anomalous','very anomalous'],
+                           'value':[df_test[param].count()-i_red.sum()-i_yellow.sum(), 
+                                    i_yellow.sum(), i_red.sum()]})
     
     # Define plot panels
     fig = make_subplots(rows=2, cols=2,
@@ -1429,18 +1396,18 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
     
     # Plot measurements
     if points_on:
-        fig.add_trace(go.Scatter(x=df_val.index, y=df_val[param], mode='markers', marker_color='black',
+        fig.add_trace(go.Scatter(x=df_test.index, y=df_test[param], mode='markers', marker_color='black',
                                  marker_size=3, hoverinfo='skip', name='Measurements'),
                       row=1, col=1)
     else:
-        fig.add_trace(go.Scatter(x=df_val.index, y=df_val[param], mode='lines', line_color='black',
+        fig.add_trace(go.Scatter(x=df_test.index, y=df_test[param], mode='lines', line_color='black',
                                  line_width=2, hoverinfo='skip', name='Measurements'),
                       row=1, col=1)
 
     # Plot CAMS
     if cams_on & (param != 'co2'):
         if points_on:
-            fig.add_trace(go.Scatter(x=df_val.index, y=df_val[param+'_cams'], mode='markers',
+            fig.add_trace(go.Scatter(x=df_test.index, y=df_test[param+'_cams'], mode='markers',
                                      hoverinfo='skip', marker_color='gray', marker_size=2,
                                      name='CAMS'),
                           row=1, col=1)
@@ -1449,7 +1416,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                                      name='CAMS + ML'),
                           row=1, col=1)            
         else:
-            fig.add_trace(go.Scatter(x=df_val.index, y=df_val[param+'_cams'], mode='lines', 
+            fig.add_trace(go.Scatter(x=df_test.index, y=df_test[param+'_cams'], mode='lines', 
                                      hoverinfo='skip', line_color='gray', line_width=0.75,
                                      name='CAMS'),
                           row=1, col=1) 
@@ -1460,7 +1427,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
             
         # Plot shaded areas for significant differences
         if len(flags_cum_yellow) > 0:
-            flags_cum = (flags_cum_yellow - df_val.index[0]).astype('int64')/3.6e12 # convert to number of hours from time 0
+            flags_cum = (flags_cum_yellow - df_test.index[0]).astype('int64')/3.6e12 # convert to number of hours from time 0
             flags_cum = flags_cum.reset_index(drop=True)
             flags_cum_diff = np.diff(flags_cum, prepend=-window_size_cams)
             i_blocks = np.array(np.where(flags_cum_diff >= window_size_cams), ndmin=1)
@@ -1471,7 +1438,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                 flags_cum = flags_cum[i_blocks]
             last_pos = 0
             for i, fl in enumerate(flags_cum):
-                t_flag = df_val.index[0] + timedelta(hours=fl)
+                t_flag = df_test.index[0] + timedelta(hours=fl)
                 if i == i_blocks.size-1:
                     n = np.sum(flags_cum_diff[last_pos+1:])
                 else:
@@ -1482,11 +1449,11 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                               row=1, col=1)
         
     # Plot flags
-    fig.add_trace(go.Scatter(x=df_exp.loc[i_yellow,'Time'], y=df_exp.loc[i_yellow,'Value'], 
+    fig.add_trace(go.Scatter(x=df_test.index[i_yellow], y=df_test.loc[i_yellow,param], 
                              mode='markers', marker_symbol='circle-open', marker_line_width=3,
                              marker_size=8, marker_color='yellow', name='Yellow flags (LOF)'),
                   row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_exp.loc[i_red,'Time'], y=df_exp.loc[i_red,'Value'], 
+    fig.add_trace(go.Scatter(x=df_test.index[i_red], y=df_test.loc[i_red,param], 
                              mode='markers', marker_symbol='circle-open', marker_line_width=3,
                              marker_size=8, marker_color='red', name='Red flags (LOF)'),
                   row=1, col=1)
@@ -1497,12 +1464,12 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                   row=1, col=2)
     
     # Plot histogram
-    fig.add_trace(go.Histogram(x=df_val[param], histnorm='probability', 
+    fig.add_trace(go.Histogram(x=df_test[param], histnorm='probability', 
                                name='Measurements', marker_color='black',
                                xbins=dict(size=bin_size), showlegend=False),
                   row=2, col=2)
     if cams_on & (param != 'co2'):
-        fig.add_trace(go.Histogram(x=df_val[param+'_cams'], histnorm='probability', 
+        fig.add_trace(go.Histogram(x=df_test[param+'_cams'], histnorm='probability', 
                                    name='CAMS', marker_color='gray',
                                    xbins=dict(size=bin_size), showlegend=False),
                       row=2, col=2)        
@@ -1539,9 +1506,55 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                               'yanchor':'bottom', 'y':1.01, 
                               'itemsizing': 'constant'},
                       margin={'t':75}, barmode='overlay', width=1600, height=600)
+    
+    out = [param, cod, res, is_new,
+           df_train.to_json(date_format='iso', orient='columns'),
+           df_test.to_json(date_format='iso', orient='columns'),
+           y_pred.to_json(date_format='iso', orient='index')] 
+    
     return fig, {'display':'flex'}, {'display':'block'}, \
         {'display':'flex', 'align-items':'center', 'justify-content':'center'}, \
-        {'display':'flex', 'padding-left':'25px'}
+        {'display':'flex', 'padding-left':'25px'}, out
+        
+        
+@callback(Output('export-csv-hourly', 'data'),
+          Output('btn_csv_hourly', 'n_clicks'),
+          Input('btn_csv_hourly', 'n_clicks'),
+          Input('cams-switch-1', 'on'),
+          Input('threshold-slider', 'value'),
+          Input('export-data-hourly', 'data'),
+          prevent_initial_call=True)
+def export_csv_hourly(n_clicks, cams_on, selected_q, input_data):
+    if (n_clicks == 0) or (n_clicks is None):
+        raise PreventUpdate
+        
+    param, cod, res, is_new, df_train, df_test, y_pred = input_data
+        
+    df_test = pd.read_json(df_test, orient='columns')
+    y_pred = pd.read_json(y_pred, orient='index', typ='series')
+        
+    # Define filename for export file
+    outfile = cod + '_' + param + '_' + \
+        str(df_test.index[0])[:10].replace('-','') + '-' + \
+        str(df_test.index[-1])[:10].replace('-','') + '_' + \
+        str(selected_q) + '_hourly.csv'
+        
+    # Create data frame for export
+    df_exp = pd.DataFrame({'Time':df_test.index, 
+                           'Value':df_test[param],
+                           'CAMS':np.nan,
+                           'CAMS + ML':np.nan,
+                           'Flag LOF':df_test['Flag LOF'], 
+                           'Flag CAMS':np.nan,
+                           'Strictness':selected_q})
+    if cams_on & (param != 'co2'):
+        df_exp['CAMS'] = df_test[param+'_cams']
+        df_exp['CAMS + ML'] = y_pred
+        df_exp['Flag CAMS'] = df_test['Flag CAMS']
+    else:
+        df_exp.drop(columns=['CAMS','CAMS + ML','Flag CAMS'], inplace=True)
+        
+    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
 
 
 @app.callback(Output('collapse-1', 'is_open'),
@@ -1555,79 +1568,37 @@ def toggle_collapse_1(n, is_open):
 
 @callback(Output('graph-monthly', 'figure'),
           Output('div-monthly', 'style'),
+          Output('export-data-monthly', 'data'),
           Input('points-switch', 'on'),
           Input('cams-switch-2', 'on'),
           Input('trend-radio', 'value'),
-          Input('trend-radio', 'options'),
           Input('length-slider', 'value'),
           Input('input-data', 'data'))
-def update_figure_2(points_on, cams_on, selected_trend, label_trend, max_length, input_data):
+def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
     if input_data == []:
         raise PreventUpdate
-        
-    global outfile_monthly
-    global df_exp_mon
-        
+              
     if input_data is None:
-        outfile_monthly = None
         return empty_plot(''), {'display':'none'}
 
-    param, cod, res, is_new, df, df_mon, df_train, df_val, y_pred, \
-        y_pred_mon, anom_score, score_train, score_val = input_data
+    param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
         
     df_mon = pd.read_json(df_mon, orient='columns')
-    df_val = pd.read_json(df_val, orient='columns')
+    df_monplot = pd.read_json(df_monplot, orient='columns')
     y_pred_mon = pd.read_json(y_pred_mon, orient='index', typ='series')
-    label_trend = pd.DataFrame(label_trend)
-    label_trend = label_trend['label'][label_trend['value']==selected_trend].item()
+    df_monplot['prediction'] = np.nan
+    df_monplot['upper'] = np.nan
+    df_monplot['lower'] = np.nan
+    df_monplot['flag'] = False
     
-    # Define filename for export file
-    outfile_monthly = cod + '_' + param + '_' + \
-        str(df_val.index[0])[:10].replace('-','') + '-' + \
-        str(df_val.index[-1])[:10].replace('-','') + '_' + \
-        str(max_length) + '_' + label_trend.replace(' ','').lower() + '_monthly.csv'
-    
-    # Extract periods
-    mtp = len(df_val.index.month.unique()) # number of months in the target period
-    df_mon = df_mon[df_mon.index < df_val.index[-1]] # exclude data after target period
-    length = np.min([df_mon.shape[0], max_length*12 + mtp])
-    df_sar = df_mon[param].iloc[-length:]
-    df_sar_to_predict = df_sar.iloc[-mtp:]
-    
-    # Fit SARIMAX
-    sar = sm.tsa.statespace.SARIMAX(df_sar[:-mtp], 
-                                    order=(1,0,0), 
-                                    seasonal_order=(0,1,1,12), 
-                                    trend=selected_trend,
-                                    enforce_stationarity=False).fit(disp=False)
-    # Make forecast
-    fcst, confidence_int = forecast_sm(sar, mtp, p_conf, df_sar.index)
-    fcst = fcst.round(2)
-    confidence_int = confidence_int.round(2)
-    
-    # Flags
-    flags = df_sar_to_predict[(df_sar_to_predict > confidence_int['upper '+param]) | 
-                   (df_sar_to_predict < confidence_int['lower '+param])]
-    
-    # Create data frame for export
-    n_meas = df_val[param].groupby(df_val.index.month).count()
-    df_exp_mon = pd.DataFrame({'Time':df_sar_to_predict.index, 
-                               'Value':df_sar_to_predict.values,
-                               'N measurements':n_meas.values,
-                               'SARIMA (best estimate)':fcst,
-                               'SARIMA (lower limit)':confidence_int['lower '+param],
-                               'SARIMA (upper limit)':confidence_int['upper '+param],
-                               'CAMS':np.nan,
-                               'CAMS + ML':np.nan,
-                               'Flag':0, 
-                               'Years used':int((length-mtp)/12),
-                               'Trend':label_trend})
-    df_exp_mon.loc[df_exp_mon['Time'].isin(flags.index), 'Flag'] = 1
-    if cams_on & (param != 'co2'):
-        df_exp_mon['CAMS'] = df_mon[param+'_cams'].iloc[-mtp:]
-        df_exp_mon['CAMS + ML'] = y_pred_mon
-    else:
-        df_exp_mon.drop(columns=['CAMS','CAMS + ML'], inplace=True)
+    # Make forecast with SARIMA
+    df_sar, fcst, confidence_int, flags = \
+        forecast_sm(df_monplot, mtp, max_length, selected_trend)
+    df_monplot['prediction'] = fcst
+    df_monplot['upper'] = confidence_int['upper '+param]
+    df_monplot['lower'] = confidence_int['lower '+param]
+    df_monplot.loc[df_monplot.index.isin(flags.index), 'flag'] = True
     
     # Plot
     fig = go.Figure(layout=go.Layout(width=1200, height=600))
@@ -1654,10 +1625,11 @@ def update_figure_2(points_on, cams_on, selected_trend, label_trend, max_length,
                                  name='SARIMA'))
     # CAMS    
     if cams_on & (param != 'co2'):
-        fig.add_trace(go.Scatter(x=df_exp_mon.index, y=df_exp_mon['CAMS + ML'], mode='markers', 
+        df_cams = df_monplot[param+'_cams'].iloc[-mtp:]
+        fig.add_trace(go.Scatter(x=y_pred_mon.index, y=y_pred_mon, mode='markers', 
                                  marker_color='royalblue', marker_size=11, marker_symbol='star', 
                                  name='CAMS + ML'))
-        fig.add_trace(go.Scatter(x=df_exp_mon.index, y=df_exp_mon['CAMS'], mode='markers', 
+        fig.add_trace(go.Scatter(x=df_cams.index, y=df_cams, mode='markers', 
                                  marker_color='white', marker_size=8, marker_symbol='diamond', 
                                  marker_line_color='gray', marker_line_width=2, name='CAMS'))        
 
@@ -1692,7 +1664,62 @@ def update_figure_2(points_on, cams_on, selected_trend, label_trend, max_length,
                       yaxis_title=param.upper() + ' mole fraction ' + 
                                       ('(ppm)' if param=='co2' else '(ppb)'))
     
-    return fig, {'display':'block'}
+    out = [param, cod, res, is_new, mtp,
+           df_mon.to_json(date_format='iso', orient='columns'),
+           df_monplot.to_json(date_format='iso', orient='columns'),
+           y_pred_mon.to_json(date_format='iso', orient='index')] 
+    
+    return fig, {'display':'block'}, out
+
+
+@callback(Output('export-csv-monthly', 'data'),
+          Output('btn_csv_monthly', 'n_clicks'),
+          Input('btn_csv_monthly', 'n_clicks'),
+          Input('cams-switch-2', 'on'),
+          Input('trend-radio', 'value'),
+          Input('trend-radio', 'options'),
+          Input('length-slider', 'value'),
+          Input('export-data-monthly', 'data'),
+          prevent_initial_call=True)
+def export_csv_monthly(n_clicks, cams_on, selected_trend, label_trend, max_length, input_data):
+    if (n_clicks == 0) or (n_clicks is None):
+        raise PreventUpdate
+
+    param, cod, res, is_new, mtp, df_mon, df_monplot, y_pred_mon = input_data
+        
+    df_mon = pd.read_json(df_mon, orient='columns')
+    df_monplot = pd.read_json(df_monplot, orient='columns')
+    y_pred_mon = pd.read_json(y_pred_mon, orient='index', typ='series')
+    label_trend = pd.DataFrame(label_trend)
+    label_trend = label_trend['label'][label_trend['value']==selected_trend].item()
+        
+    # Define filename for export file
+    outfile = cod + '_' + param + '_' + \
+        str(df_monplot.index[-mtp])[:7].replace('-','') + '-' + \
+        str(df_monplot.index[-1])[:7].replace('-','') + '_' + \
+        str(max_length) + '_' + label_trend.replace(' ','').lower() + '_monthly.csv'
+      
+    # Create data frame for export
+    length = np.min([df_mon.shape[0], max_length*12 + mtp])
+    df_exp = pd.DataFrame({'Time':df_monplot.index[-mtp:], 
+                           'Value':df_monplot[param].iloc[-mtp:],
+                           'N measurements':df_monplot['n'].iloc[-mtp:],
+                           'SARIMA (best estimate)':df_monplot['prediction'].iloc[-mtp:],
+                           'SARIMA (lower limit)':df_monplot['lower'].iloc[-mtp:],
+                           'SARIMA (upper limit)':df_monplot['upper'].iloc[-mtp:],
+                           'CAMS':np.nan,
+                           'CAMS + ML':np.nan,
+                           'Flag':0, 
+                           'Years used':int((length-mtp)/12),
+                           'Trend':label_trend})
+    df_exp.loc[df_exp['Time'].isin(df_monplot.index[df_monplot['flag']]), 'Flag'] = 1
+    if cams_on & (param != 'co2'):
+        df_exp['CAMS'] = df_monplot[param+'_cams'].iloc[-mtp:]
+        df_exp['CAMS + ML'] = y_pred_mon
+    else:
+        df_exp.drop(columns=['CAMS','CAMS + ML'], inplace=True)
+        
+    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
 
 
 @app.callback(Output('collapse-2', 'is_open'),
@@ -1712,105 +1739,56 @@ def toggle_collapse_2(n, is_open):
 def update_figure_3(points_on, n_years, input_data):
     if input_data == []:
         raise PreventUpdate
-        
-    global outfile_dc
-    global df_exp_dc
-    global outfile_sc
-    global df_exp_sc
-    global outfile_vc
-    global df_exp_vc
-        
+              
     if input_data is None:
         return empty_plot(''), {'display':'none'}
     
-    param, cod, res, is_new, df, df_mon, df_train, df_val, y_pred, \
-        y_pred_mon, anom_score, score_train, score_val = input_data
+    param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
         
-    df = pd.read_json(df, orient='columns')
-    df_mon = pd.read_json(df_mon, orient='columns')
     df_train = pd.read_json(df_train, orient='columns')
-    df_val = pd.read_json(df_val, orient='columns')
-    
-    # Deal with periods spanning two calendar years by shifting the data before 01.01 by one year
-    lastj = df_val.index.dayofyear[-1]
-    if is_new & (df_val.index.dayofyear[0] > lastj):
-        new_index = pd.Series(df.index)
-        new_index[df.index.dayofyear>lastj] = \
-            new_index[df.index.dayofyear>lastj] + timedelta(days=365)
-        df.set_index(new_index, inplace=True)
+    df_test = pd.read_json(df_test, orient='columns')
+    df_mon = pd.read_json(df_mon, orient='columns')
+    df_all = df_train.copy()
+    df_all.loc[df_all.index.isin(df_test.index), param] = df_test[param].values
         
     # Select data to be plotted
     lastyear = df_train[param].dropna().index.year[-1]
     firstyear = lastyear - n_years + 1
-    firstmonth = df_val.index.month[0]
-    df_train_sel_diurnal = df[(df.index.year>=firstyear) & 
-                              (df.index.dayofyear.isin(df_val.index.dayofyear.unique()))]
-    df_mon_new = df_mon[(df_mon.index>=df_val.index[0]) & (df_mon.index<df_val.index[-1])]
+    firstmonth = df_test.index.month[0]
+    df_mon_new = df_mon[(df_mon.index>=df_test.index[0]) & (df_mon.index<df_test.index[-1])]
     df_mon_sel = df_mon[df_mon.index.year>=firstyear].copy()
     if is_new:
+        df_all = shift_year(df_all, df_test)
         df_mon_sel[df_mon_sel.index.isin(df_mon_new.index)] = np.nan
         df_train_sel = df_train.loc[df_train.index.year>=firstyear, param]
     else:
-        df_train_sel = df.loc[df.index.year>=firstyear, param]
+        df_train_sel = df_all.loc[df_all.index.year>=firstyear, param]
+    df_train_sel_diurnal = df_all[(df_all.index.year>=firstyear) & 
+                              (df_all.index.dayofyear.isin(df_test.index.dayofyear.unique()))]
     
     # Calculate diurnal cycle and number of available days per hour
     if res != 'monthly':
         dc = df_train_sel_diurnal[[param]].groupby(df_train_sel_diurnal.index.hour).mean().round(2)
-        dc_val = df_val[[param]].groupby(df_val.index.hour).mean().round(2)
-        dc_n = df_val[[param]].groupby(df_val.index.hour).count()
+        dc_val = df_test[[param]].groupby(df_test.index.hour).mean().round(2)
+        dc_n = df_test[[param]].groupby(df_test.index.hour).count()
     
     # Calculate mean seasonal cycle
     sc = df_mon_sel[[param]].groupby(df_mon_sel.index.month).mean().round(2)
     sc_new = df_mon_new[[param]].groupby(df_mon_new.index.month).mean().round(2)
     
     # Calculate variability for submitted data
-    vc_new = df_val.groupby(df_val.index.month).std().round(2)
-    n_new = df_val.groupby(df_val.index.month).count()
+    vc_new = df_test[[param]].groupby(df_test.index.month).std().round(2)
+    n_new = df_test[[param]].groupby(df_test.index.month).count()
     vc_new[n_new<n_min] = np.nan
-    
-    # Define filenames for export
-    outfile_dc = cod + '_' + param + '_' + \
-        str(firstyear) + '-' + str(lastyear) + '_diurnal-cycle.csv'
-    outfile_sc = cod + '_' + param + '_' + \
-        str(firstyear) + '-' + str(lastyear) + '_seasonal-cycle.csv'
-    outfile_vc = cod + '_' + param + '_' + \
-        str(firstyear) + '-' + str(lastyear) + '_variability-cycle.csv'
-    
-    # Create data frames for export
-    label = 'Your data' if is_new else 'Selected period'
-    period_label = 'Mean  ' + str(firstyear) + '-' + str(lastyear)
-    
-    df_exp_sc = pd.DataFrame({'Month':np.arange(1,13), 
-                             period_label:np.nan,
-                             label:np.nan})
-    df_exp_sc.set_index(df_exp_sc['Month'], inplace=True)
-    df_exp_sc.loc[sc_new.index, label] = sc_new[param].values
-    df_exp_sc.loc[sc.index, period_label] = sc[param]
-    
-    if res != 'monthly':
-        
-        df_exp_dc = pd.DataFrame({'Hour':dc.index, 
-                                 period_label:dc[param],
-                                 label:dc_val[param],
-                                 'N days':dc_n[param]})
-    
-        df_exp_vc = pd.DataFrame({'Month':np.arange(1,13), 
-                                 period_label:np.nan,
-                                 label:np.nan})
-        df_exp_vc.set_index(df_exp_vc['Month'], inplace=True)
-        df_exp_vc.loc[vc_new.index, label] = vc_new[param].values
-       
-    if n_years == 1: # remove multi-year average if there is only one year
-        df_exp_sc.drop(columns=[period_label], inplace=True)
-        if res != 'monthly':
-            df_exp_dc.drop(columns=[period_label], inplace=True)
-            df_exp_vc.drop(columns=[period_label], inplace=True)
     
     # Define plot panels and line colors
     fig = make_subplots(rows=1, cols=3, horizontal_spacing=0.075,
                         subplot_titles=('Diurnal cycle', 'Seasonal cycle', 'Variability cycle'))
     colors = ['#f0f921', '#fdb42f','#ed7953', '#cc4778', '#9c179e', '#5c01a6', '#0d0887'] # plasma palette
     years = np.arange(firstyear, firstyear+n_years)
+    label = 'Your data' if is_new else 'Selected period'
+    period_label = 'Mean  ' + str(firstyear) + '-' + str(lastyear)
        
     # Plot diurnal cycle
     if res != 'monthly':
@@ -1819,7 +1797,6 @@ def update_figure_3(points_on, n_years, input_data):
             if ((iy != lastyear) | (firstmonth == 1)) & (firstyear != lastyear):
                 df_train_year = df_train_sel_diurnal[df_train_sel_diurnal.index.year==iy]
                 dc_train_year = df_train_year[[param]].groupby(df_train_year.index.hour).mean().round(2)
-                df_exp_dc[str(iy)] = dc_train_year[param]
                 if points_on:
                     fig.add_trace(go.Scatter(x=x_labels, y=dc_train_year[param], mode='markers',
                                              marker_size=4, marker_color=colors[iy-firstyear-n_years], 
@@ -1857,8 +1834,6 @@ def update_figure_3(points_on, n_years, input_data):
     # Plot seasonal cycle
     for iy in years:
         df_mon_year = df_mon_sel[df_mon_sel.index.year==iy]
-        df_exp_sc[str(iy)] = np.nan
-        df_exp_sc.loc[df_mon_year.index.month, str(iy)] = df_mon_year[param].values
         if points_on:
             fig.add_trace(go.Scatter(x=df_mon_year.index.month, y=df_mon_year[param], mode='markers',
                                      marker_size=4, marker_color=colors[iy-firstyear-n_years], 
@@ -1886,14 +1861,15 @@ def update_figure_3(points_on, n_years, input_data):
                   row=1, col=2)
     
     # Plot seasonal cycle of variability
+    df_vc = pd.DataFrame(index=range(1,13))
     if res != 'monthly':
         for iy in years:
             df_train_year = df_train_sel[df_train_sel.index.year==iy]
             vc_year = df_train_year.groupby(df_train_year.index.month).std().round(2)
             n_year = df_train_year.groupby(df_train_year.index.month).count()
             vc_year[n_year<n_min] = np.nan
-            df_exp_vc[str(iy)] = np.nan
-            df_exp_vc.loc[vc_year.index, str(iy)] = vc_year.values
+            df_vc[str(iy)] = np.nan
+            df_vc.loc[vc_year.index, str(iy)] = vc_year.values
             if points_on:
                 fig.add_trace(go.Scatter(x=vc_year.index, y=vc_year, mode='markers',
                                          marker_size=4, marker_color=colors[iy-firstyear-n_years], 
@@ -1905,18 +1881,18 @@ def update_figure_3(points_on, n_years, input_data):
                                          name=str(iy), showlegend=False),
                               row=1, col=3)                
         if n_years > 1:
-            df_exp_vc[period_label] = df_exp_vc[list(map(str,years))].mean(axis=1).round(2).values # average of all years in df_train_sel
+            vc_multiyear = df_vc[list(map(str,years))].mean(axis=1).round(2).values # average of all years in df_train_sel
             if points_on:
-                fig.add_trace(go.Scatter(x=df_exp_vc.index, y=df_exp_vc[period_label], mode='markers',
+                fig.add_trace(go.Scatter(x=df_vc.index, y=vc_multiyear, mode='markers',
                                          marker_size=8, marker_color='royalblue',
                                          name=period_label, showlegend=False),
                               row=1, col=3)
             else:
-                fig.add_trace(go.Scatter(x=df_exp_vc.index, y=df_exp_vc[period_label], mode='lines',
+                fig.add_trace(go.Scatter(x=df_vc.index, y=vc_multiyear, mode='lines',
                                          line_width=5, line_color='royalblue',
                                          name=period_label, showlegend=False),
                               row=1, col=3)
-        fig.add_trace(go.Scatter(x=df_exp_vc.index, y=df_exp_vc[label], mode='markers', 
+        fig.add_trace(go.Scatter(x=vc_new.index, y=vc_new[param], mode='markers', 
                                  marker_color='black', marker_size=10, 
                                  marker_symbol='circle', name=label, showlegend=False),
                       row=1, col=3)
@@ -1935,7 +1911,7 @@ def update_figure_3(points_on, n_years, input_data):
     month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True, tickfont_size=14)
     fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True, tickfont_size=14)
-    fig.update_xaxes(title_text='Month', ticktext=month_names, tickvals=df_exp_sc.index, 
+    fig.update_xaxes(title_text='Month', ticktext=month_names, tickvals=np.arange(1,13), 
                      range=[0,13], showgrid=False, row=1, col=2)
     fig.update_yaxes(title_text=param.upper() + ' mole fraction ' + units,
                      row=1, col=2)
@@ -1943,7 +1919,7 @@ def update_figure_3(points_on, n_years, input_data):
         fig.update_xaxes(title_text='Time UTC', tickformat='%H:%M', row=1, col=1)
         fig.update_yaxes(title_text=param.upper() + ' mole fraction ' + units,
                          row=1, col=1)
-        fig.update_xaxes(title_text='Month', ticktext=month_names, tickvals=df_exp_vc.index, 
+        fig.update_xaxes(title_text='Month', ticktext=month_names, tickvals=np.arange(1,13), 
                          range=[0,13], showgrid=False, row=1, col=3)
         fig.update_yaxes(title_text='Standard deviation of hourly ' + param.upper() + 
                              ' mole fraction ' + units,
@@ -1958,6 +1934,178 @@ def update_figure_3(points_on, n_years, input_data):
     return fig, {'display':'block'}
 
 
+@callback(Output('export-csv-dc', 'data'),
+          Output('btn_csv_dc', 'n_clicks'),
+          Input('btn_csv_dc', 'n_clicks'),
+          Input('n-years', 'value'),
+          Input('export-data-hourly', 'data'),
+          prevent_initial_call=True)
+def export_csv_dc(n_clicks, n_years, input_data):
+    if (n_clicks == 0) or (n_clicks is None):
+        raise PreventUpdate
+        
+    param, cod, res, is_new, df_train, df_test, y_pred = input_data
+        
+    if res == 'monthly':
+        raise PreventUpdate
+        
+    df_train = pd.read_json(df_train, orient='columns')
+    df_test = pd.read_json(df_test, orient='columns')
+    df_all = df_train.copy()
+    df_all.loc[df_all.index.isin(df_test.index), param] = df_test[param].values
+    if is_new:
+        df_all = shift_year(df_all, df_test)
+    
+    # Select data to be exported
+    lastyear = df_train[param].dropna().index.year[-1]
+    firstyear = lastyear - n_years + 1
+    firstmonth = df_test.index.month[0]
+    df_train_sel_diurnal = df_all[(df_all.index.year>=firstyear) & 
+                              (df_all.index.dayofyear.isin(df_test.index.dayofyear.unique()))]
+    
+    # Calculate diurnal cycle and number of available days per hour
+    dc = df_train_sel_diurnal[[param]].groupby(df_train_sel_diurnal.index.hour).mean().round(2)
+    dc_val = df_test[[param]].groupby(df_test.index.hour).mean().round(2)
+    dc_n = df_test[[param]].groupby(df_test.index.hour).count()
+        
+    # Define filename for export
+    outfile = cod + '_' + param + '_' + \
+        str(firstyear) + '-' + str(lastyear) + '_diurnal-cycle.csv'
+    
+    # Create data frame for export
+    label = 'Your data' if is_new else 'Selected period'
+    period_label = 'Mean  ' + str(firstyear) + '-' + str(lastyear)
+    df_exp = pd.DataFrame({'Hour':dc.index, 
+                           period_label:dc[param],
+                           label:dc_val[param],
+                           'N days':dc_n[param]})
+    years = np.arange(firstyear, firstyear+n_years)
+    for iy in years:
+        if ((iy != lastyear) | (firstmonth == 1)) & (firstyear != lastyear):
+            df_train_year = df_train_sel_diurnal[df_train_sel_diurnal.index.year==iy]
+            dc_train_year = df_train_year[[param]].groupby(df_train_year.index.hour).mean().round(2)
+            df_exp[str(iy)] = dc_train_year[param]
+    if n_years == 1: # remove multi-year average if there is only one year
+        df_exp.drop(columns=[period_label], inplace=True)
+        
+    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
+
+
+@callback(Output('export-csv-sc', 'data'),
+          Output('btn_csv_sc', 'n_clicks'),
+          Input('btn_csv_sc', 'n_clicks'),
+          Input('n-years', 'value'),
+          Input('export-data-hourly', 'data'),
+          Input('export-data-monthly', 'data'),
+          prevent_initial_call=True)
+def export_csv_sc(n_clicks, n_years, input_data_h, input_data_m):
+    if (n_clicks == 0) or (n_clicks is None):
+        raise PreventUpdate
+        
+    param, cod, res, is_new, df_train, df_test, y_pred = input_data_h      
+    param, cod, res, is_new, mtp, df_mon, df_monplot, y_pred_mon = input_data_m
+    
+    df_train = pd.read_json(df_train, orient='columns')
+    df_test = pd.read_json(df_test, orient='columns')
+    df_mon = pd.read_json(df_mon, orient='columns')
+    
+    # Select data to be exported
+    lastyear = df_train[param].dropna().index.year[-1]
+    firstyear = lastyear - n_years + 1
+    df_mon_new = df_mon[(df_mon.index>=df_test.index[0]) & (df_mon.index<df_test.index[-1])]
+    df_mon_sel = df_mon[df_mon.index.year>=firstyear].copy()
+    if is_new:
+        df_mon_sel[df_mon_sel.index.isin(df_mon_new.index)] = np.nan
+    
+    # Calculate mean seasonal cycle
+    sc = df_mon_sel[[param]].groupby(df_mon_sel.index.month).mean().round(2)
+    sc_new = df_mon_new[[param]].groupby(df_mon_new.index.month).mean().round(2)
+        
+    # Define filename for export 
+    outfile = cod + '_' + param + '_' + \
+        str(firstyear) + '-' + str(lastyear) + '_seasonal-cycle.csv'
+        
+    # Create data frame for export
+    label = 'Your data' if is_new else 'Selected period'
+    period_label = 'Mean  ' + str(firstyear) + '-' + str(lastyear)    
+    df_exp = pd.DataFrame({'Month':np.arange(1,13), 
+                           period_label:np.nan,
+                           label:np.nan})
+    df_exp.set_index(df_exp['Month'], inplace=True)
+    df_exp.loc[sc_new.index, label] = sc_new[param].values
+    df_exp.loc[sc.index, period_label] = sc[param]    
+    years = np.arange(firstyear, firstyear+n_years)    
+    for iy in years:
+        df_mon_year = df_mon_sel[df_mon_sel.index.year==iy]
+        df_exp[str(iy)] = np.nan
+        df_exp.loc[df_mon_year.index.month, str(iy)] = df_mon_year[param].values
+    if n_years == 1: # remove multi-year average if there is only one year
+        df_exp.drop(columns=[period_label], inplace=True)
+        
+    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
+
+
+@callback(Output('export-csv-vc', 'data'),
+          Output('btn_csv_vc', 'n_clicks'),
+          Input('btn_csv_vc', 'n_clicks'),
+          Input('n-years', 'value'),
+          Input('export-data-hourly', 'data'),
+          prevent_initial_call=True)
+def export_csv_vc(n_clicks, n_years, input_data):
+    if (n_clicks == 0) or (n_clicks is None):
+        raise PreventUpdate
+        
+    param, cod, res, is_new, df_train, df_test, y_pred = input_data
+        
+    if res == 'monthly':
+        raise PreventUpdate
+        
+    df_train = pd.read_json(df_train, orient='columns')
+    df_test = pd.read_json(df_test, orient='columns')
+    df_all = df_train.copy()
+    df_all.loc[df_all.index.isin(df_test.index), param] = df_test[param].values 
+        
+    # Select data to be exported
+    lastyear = df_train[param].dropna().index.year[-1]
+    firstyear = lastyear - n_years + 1
+    if is_new:
+        df_train_sel = df_train.loc[df_train.index.year>=firstyear, param]
+    else:
+        df_train_sel = df_all.loc[df_all.index.year>=firstyear, param]
+    
+    # Calculate variability for submitted data
+    vc_new = df_test[[param]].groupby(df_test.index.month).std().round(2)
+    n_new = df_test[[param]].groupby(df_test.index.month).count()
+    vc_new[n_new<n_min] = np.nan
+        
+    # Define filename for export
+    outfile = cod + '_' + param + '_' + \
+        str(firstyear) + '-' + str(lastyear) + '_variability-cycle.csv'
+      
+    # Create data frame for export
+    label = 'Your data' if is_new else 'Selected period'
+    period_label = 'Mean  ' + str(firstyear) + '-' + str(lastyear)         
+    df_exp = pd.DataFrame({'Month':np.arange(1,13), 
+                           period_label:np.nan,
+                           label:np.nan})
+    df_exp.set_index(df_exp['Month'], inplace=True)
+    df_exp.loc[vc_new.index, label] = vc_new[param].values   
+    if n_years == 1: # remove multi-year average if there is only one year
+        df_exp.drop(columns=[period_label], inplace=True)
+    years = np.arange(firstyear, firstyear+n_years)
+    for iy in years:
+        df_train_year = df_train_sel[df_train_sel.index.year==iy]
+        vc_year = df_train_year.groupby(df_train_year.index.month).std().round(2)
+        n_year = df_train_year.groupby(df_train_year.index.month).count()
+        vc_year[n_year<n_min] = np.nan
+        df_exp[str(iy)] = np.nan
+        df_exp.loc[vc_year.index, str(iy)] = vc_year.values
+    if n_years > 1:
+        df_exp[period_label] = df_exp[list(map(str,years))].mean(axis=1).round(2).values # average of all years in df_train_sel
+        
+    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
+
+
 @app.callback(Output('collapse-3', 'is_open'),
               [Input('info-button-3', 'n_clicks')],
               [State('collapse-3', 'is_open')])
@@ -1968,4 +2116,4 @@ def toggle_collapse_3(n, is_open):
     
     
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=8000)
+    app.run(debug=True, host='0.0.0.0', port=8000)
