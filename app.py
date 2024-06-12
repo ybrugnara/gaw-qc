@@ -189,7 +189,7 @@ def read_start_end(db_file, gaw_id, v, h):
     :param gaw_id: GAW id of the target station
     :param v: Variable (one of ch4, co, co2, o3)
     :param h: Height from the ground
-    :return: Tuple of two dates
+    :return: List of two dates
     """
     with sqlite3.connect(db_file) as conn:
         cur = conn.cursor()
@@ -199,7 +199,7 @@ def read_start_end(db_file, gaw_id, v, h):
         series_id = cur.fetchone()
         
         if series_id is None:
-            return (None, None)
+            return None, None
         
         series_id = series_id[0]
         cur.execute('SELECT MIN(time),MAX(time) FROM gaw_hourly WHERE ' + \
@@ -211,10 +211,10 @@ def read_start_end(db_file, gaw_id, v, h):
                             'series_id=?', (series_id,))
             dates = cur.fetchall()[0]     
             last_day = calendar.monthrange(int(dates[1][:4]),int(dates[1][5:7]))[1]
-            return (dates[0]+'-01', dates[1]+'-'+str(last_day))
+            return dates[0]+'-01', dates[1]+'-'+str(last_day)
         
         else:   
-            return (dates[0][:10], dates[1][:10])
+            return dates[0][:10], dates[1][:10]
         
         
 def parse_data(content, filename, par, tz):
@@ -1134,14 +1134,16 @@ def update_dates(cod, par, hei):
     if (cod is None) | (par is None) | (hei is None):
         raise PreventUpdate
         
-    dates = read_start_end(inpath, cod, par.lower(), hei)
+    d0, d1 = read_start_end(inpath, cod, par.lower(), hei)
     
-    if dates[1] is None:
+    if d1 is None:
         return None, None, None, 'hide'
     
-    return datetime.strptime(dates[0], '%Y-%m-%d'), \
-        datetime.strptime(dates[1], '%Y-%m-%d'), \
-        date(int(dates[1][:4]), 1, 1), 'auto'
+    if d0 < '2020-01-01':
+        d0 = '2020-01-01'
+    
+    return datetime.strptime(d0, '%Y-%m-%d'), datetime.strptime(d1, '%Y-%m-%d'), \
+        date(int(d1[:4]), 1, 1), 'auto'
         
         
 @callback(Output('timezone-dropdown', 'value', allow_duplicate=True),
