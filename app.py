@@ -295,7 +295,7 @@ def write_log(log_file, row):
     :return: None
     """
     log = pd.DataFrame(dict(time=row[0], gaw_id=row[1], variable=row[2], height=row[3],
-                            start=row[4], end=row[5], upload=row[6]),
+                            start=row[4], end=row[5], upload=row[6], loading_time=row[7]),
                        index=[0])
     h = True if len(glob.glob(log_file)) == 0 else False      
     log.to_csv(log_file, header=h, index=False, mode='a', date_format='%Y-%m-%d')
@@ -1219,6 +1219,7 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
         ((date1 is None) & ((tz is None) | (content is None))):
         raise PreventUpdate
         
+    start_time = datetime.now()
     par = par.lower()
     
     if content is None:
@@ -1316,9 +1317,11 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
     df_monplot.loc[df_monplot.index.isin(n_meas.index),'n'] = n_meas
 
     # Write log
+    stop_time = datetime.now()
     write_log(logpath, 
               [datetime.isoformat(datetime.now(), sep=' ', timespec='seconds'),
-               cod, par, hei, time0, time1, int(is_new)])
+               cod, par, hei, time0, time1, int(is_new),
+               (stop_time-start_time).seconds])
     
     test_cols = [par] if par == 'co2' else [par, par+'_cams']
     out = [par, cod, res, is_new, mtp,
