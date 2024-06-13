@@ -14,6 +14,7 @@ from dash import Dash, dcc, html, Input, Output, State, callback
 from dash.exceptions import PreventUpdate
 import dash_daq as daq
 import dash_bootstrap_components as dbc
+from flask_caching import Cache
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
@@ -540,6 +541,13 @@ def add_logo(fig, x, y, sx, sy):
 app = Dash(external_stylesheets=[dbc.themes.MATERIA], 
            title='GAW-qc', update_title='Loading...')
 
+cache = Cache(app.server, 
+              config={ # note that filesystem cache doesn't work on systems with ephemeral filesystems like Heroku
+                      'CACHE_TYPE': 'filesystem',
+                      'CACHE_DIR': 'cache',   
+                      'CACHE_THRESHOLD': 50 # should be equal to maximum number of users on the app at a single time
+    })
+
 metadata = read_meta(inpath)
 
 app.layout = html.Div([
@@ -699,15 +707,13 @@ app.layout = html.Div([
     # Data loading with message
     html.Div([
         html.Label([], id='label-wait'),
-        # Data storage
+        # Store input parameters (also used to signal callbacks when to fire)
         dcc.Loading(
             id='loading-data',
             type='circle',
             fullscreen=False, 
             children=dcc.Store(id='input-data', data=[], storage_type='memory')
             ),
-        dcc.Store(id='export-data-hourly', data=[], storage_type='memory'),
-        dcc.Store(id='export-data-monthly', data=[], storage_type='memory')
         ], style={'text-align':'center', 'margin-top':'50px'}),
 
     # Div containing all the plots
@@ -1191,7 +1197,7 @@ def update_tz(tz, content):
           Input('timezone-dropdown', 'value'),
           Input('upload-data', 'contents'),
           prevent_initial_call=True)
-def wait_message (cod, par, hei, date1, tz, content):
+def wait_message(cod, par, hei, date1, tz, content):
     if (cod is None) | (par is None) | (hei is None) | \
         ((date1 is None) & ((tz is None) | (content is None))):
         return '', {'display':'none'}, 'auto'
@@ -1199,27 +1205,22 @@ def wait_message (cod, par, hei, date1, tz, content):
         return 'Please wait - Dashboard is loading...', \
             {'font-size':'18px', 'font-weight': 'bold', 'margin-bottom':'25px'}, \
             'hide'
-
-
-@callback(Output('input-data', 'data'),
-          Output('date-range', 'start_date', allow_duplicate=True),
-          Output('date-range', 'end_date', allow_duplicate=True),
-          Output('upload-data', 'contents', allow_duplicate=True),
-          Input('station-dropdown', 'value'),
-          Input('param-dropdown', 'value'),
-          Input('height-dropdown', 'value'),
-          Input('date-range', 'start_date'),
-          Input('date-range', 'end_date'),
-          Input('timezone-dropdown', 'value'),
-          Input('upload-data', 'contents'),
-          State('upload-data', 'filename'),
+            
+            
+@callback(Output('input-data', 'data', allow_duplicate=True), # reset dcc.Store to avoid firing all callbacks at once when an input parameter is changed
+          Input('label-wait', 'children'),
           prevent_initial_call=True)
-def update_data(cod, par, hei, date0, date1, tz, content, filename):
-    if (cod is None) | (par is None) | (hei is None) | \
-        ((date1 is None) & ((tz is None) | (content is None))):
+def reset_data(lab):
+    if lab == '':
         raise PreventUpdate
-        
-    start_time = datetime.now()
+    
+    return []
+           
+
+# Read data from database and perform the most expensive computations
+# Output is saved in the cache of the server: the function is not executed again unless input changes            
+@cache.memoize()
+def get_data(cod, par, hei, date0, date1, tz, content, filename):
     par = par.lower()
     
     if content is None:
@@ -1279,7 +1280,7 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
     df_all.loc[df_all.index.isin(df_test.index), par] = np.nan
     df_train = df_all.drop(columns='n_meas')
     if df_test[par].count() == 0:
-        return None, None, None, None
+        return None
 
     # Downscale/debias CAMS
     empty_df = df_test.drop(index=df_test.index)
@@ -1300,9 +1301,9 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
     # Apply Sub-LOF on training and test periods
     if res == 'hourly':
         score_train = run_sublof(df_train[par], subLOF, window_size)
-        score_val = run_sublof(df_test[par], subLOF, window_size)
+        score_test = run_sublof(df_test[par], subLOF, window_size)
     else:
-        score_train = score_val = pd.Series([])
+        score_train = score_test = pd.Series([])
     
     # Prepare data for monthly plot
     mtp = len(df_test.index.month.unique()) # months to predict
@@ -1315,16 +1316,9 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
     n_meas = n_meas[n_meas.index <= df_test.index[-1]]
     df_monplot['n'] = np.nan
     df_monplot.loc[df_monplot.index.isin(n_meas.index),'n'] = n_meas
-
-    # Write log
-    stop_time = datetime.now()
-    write_log(logpath, 
-              [datetime.isoformat(datetime.now(), sep=' ', timespec='seconds'),
-               cod, par, hei, time0, time1, int(is_new),
-               (stop_time-start_time).seconds])
     
     test_cols = [par] if par == 'co2' else [par, par+'_cams']
-    out = [par, cod, res, is_new, mtp,
+    out = [par, cod, res, is_new, mtp, time0, time1,
            df_train[[par]].to_json(date_format='iso', orient='columns'),
            df_test[test_cols].to_json(date_format='iso', orient='columns'),
            df_mon.to_json(date_format='iso', orient='columns'),
@@ -1333,55 +1327,58 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
            y_pred_mon.to_json(date_format='iso', orient='index'),
            anom_score.to_json(date_format='iso', orient='index'),
            score_train.to_json(date_format='iso', orient='index'),
-           score_val.to_json(date_format='iso', orient='index')]   
+           score_test.to_json(date_format='iso', orient='index')]
+    
+    return out
+
+
+@callback(Output('input-data', 'data', allow_duplicate=True), # this fires the dashboard
+          Output('date-range', 'start_date', allow_duplicate=True), # reset
+          Output('date-range', 'end_date', allow_duplicate=True), # reset
+          Output('upload-data', 'contents', allow_duplicate=True), # reset
+          Input('station-dropdown', 'value'),
+          Input('param-dropdown', 'value'),
+          Input('height-dropdown', 'value'),
+          Input('date-range', 'start_date'),
+          Input('date-range', 'end_date'),
+          Input('timezone-dropdown', 'value'),
+          Input('upload-data', 'contents'),
+          State('upload-data', 'filename'),
+          prevent_initial_call=True)
+def update_data(cod, par, hei, date0, date1, tz, content, filename):
+    if (cod is None) | (par is None) | (hei is None) | \
+        ((date1 is None) & ((tz is None) | (content is None))):
+        raise PreventUpdate
+        
+    start_time = datetime.now()
+    
+    data = get_data(cod, par, hei, date0, date1, tz, content, filename)
+    
+    if data is None:
+        return None, None, None, None
+    
+    param, cod, res, is_new, mtp, time0, time1 = data[:7]
+    out = [cod, par, hei, date0, date1, tz, content, filename]
+    
+    # Write log
+    stop_time = datetime.now()
+    write_log(logpath, 
+              [datetime.isoformat(start_time, sep=' ', timespec='seconds'),
+               cod, par, hei, time0, time1, int(is_new),
+               (stop_time-start_time).seconds])
     
     return out, None, None, None
 
 
-@callback(Output('graph-hourly', 'figure'),
-          Output('div-switch', 'style'),
-          Output('div-hourly', 'style'),
-          Output('div-hourly-settings', 'style'),
-          Output('div-hourly-info', 'style'),
-          Output('div-text-1', 'style'),
-          Output('export-data-hourly', 'data'),
-          Input('points-switch', 'on'),
-          Input('cams-switch-1', 'on'),
-          Input('threshold-slider', 'value'),
-          Input('bin-slider', 'value'),
-          Input('input-data', 'data'))
-def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
-    if input_data == []:
-        raise PreventUpdate
-        
-    if input_data is None:
-        return empty_plot('No data available in the selected period - Try choosing a longer period'), \
-            {'display':'none'}, {'display':'block'}, {'display':'none'}, {'display':'none'}, \
-            {'display':'none'}, None
-                  
-    param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
-        y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
-        
-    out = [param, cod, res, is_new, df_train, df_test, y_pred] 
-        
-    if res == 'monthly':
-        return empty_plot('No hourly data available'), {'display':'flex'}, {'display':'block'}, \
-            {'display':'none'}, {'display':'none'}, {'display':'flex', 'margin-top':'50px'}, out
-        
-    df_train = pd.read_json(df_train, orient='columns')
-    df_test = pd.read_json(df_test, orient='columns')
-    y_pred = pd.read_json(y_pred, orient='index', typ='series')
-    anom_score = pd.read_json(anom_score, orient='index', typ='series')
-    score_train = pd.read_json(score_train, orient='index')
-    score_val = pd.read_json(score_val, orient='index')
-    
+# Flag hourly data for plot and export
+def process_hourly(param, df_train, df_test, anom_score, score_train, score_test, cams_on, selected_q):
     # Flag data after Sub-LOF
     df_test['Flag LOF'] = 0
     threshold = thr0_lof+incr_lof*selected_q
     thr_yellow = np.quantile(score_train.dropna(), threshold)
     thr_red = thr_yellow * 2
-    flags_yellow = df_test[(score_val[0]>thr_yellow) & (score_val[0]<=thr_red)]
-    flags_red = df_test[score_val[0]>thr_red]
+    flags_yellow = df_test[(score_test[0]>thr_yellow) & (score_test[0]<=thr_red)]
+    flags_red = df_test[score_test[0]>thr_red]
     df_test.loc[df_test.index.isin(flags_yellow.index), 'Flag LOF'] = 1
     
     # Flag extreme outliers that exceed historical records by half the historical range (red flags only)
@@ -1399,13 +1396,13 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
         anom_score_train = anom_score[anom_score.index.isin(df_train.dropna().index)]
         thr_cum_yellow = np.quantile(anom_score_train.dropna(), 
                                      [1-threshold_cum, threshold_cum]) * 2
-        anom_score_val = anom_score[anom_score.index.isin(df_test.index)]
-        flags_cum_yellow = (anom_score_val < thr_cum_yellow[0]) | \
-            (anom_score_val > thr_cum_yellow[1])
+        anom_score_test = anom_score[anom_score.index.isin(df_test.index)]
+        flags_cum_yellow = (anom_score_test < thr_cum_yellow[0]) | \
+            (anom_score_test > thr_cum_yellow[1])
         flags_cum_yellow = pd.Series(df_test.index[flags_cum_yellow])
         for fl in flags_cum_yellow: # flags must be extended to the entire window used by cumulative_score
-            time0 = max(fl-timedelta(hours=window_size_cams-1), df_test.index[0])
-            additional_times = pd.Series(pd.date_range(time0, fl, freq='H'))
+            t0 = max(fl-timedelta(hours=window_size_cams-1), df_test.index[0])
+            additional_times = pd.Series(pd.date_range(t0, fl, freq='H'))
             flags_cum_yellow = pd.concat([flags_cum_yellow, additional_times], ignore_index=True)
         flags_cum_yellow.drop_duplicates(inplace=True)
         flags_cum_yellow.sort_values(inplace=True)
@@ -1414,8 +1411,55 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
         i_yellow = (df_test['Flag LOF'] == 1) & (df_test['Flag CAMS'] != 1)
         i_red = (df_test['Flag LOF'] + df_test['Flag CAMS']) > 1
     else:
+        flags_cum_yellow = None
         i_yellow = df_test['Flag LOF'] == 1
         i_red = df_test['Flag LOF'] == 2
+        
+    return df_test, flags_cum_yellow, i_yellow, i_red
+
+
+@callback(Output('graph-hourly', 'figure'),
+          Output('div-switch', 'style'),
+          Output('div-hourly', 'style'),
+          Output('div-hourly-settings', 'style'),
+          Output('div-hourly-info', 'style'),
+          Output('div-text-1', 'style'),
+          Input('points-switch', 'on'),
+          Input('cams-switch-1', 'on'),
+          Input('threshold-slider', 'value'),
+          Input('bin-slider', 'value'),
+          Input('input-data', 'data'))
+def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):   
+    if input_data == []:
+        raise PreventUpdate
+        
+    if input_data is None:
+        return empty_plot('No data available in the selected period - Try choosing a longer period'), \
+            {'display':'none'}, {'display':'block'}, {'display':'none'}, {'display':'none'}, \
+            {'display':'none'}
+    
+    # Get input data from browser memory
+    cod, param, hei, date0, date1, tz, content, filename = input_data
+    
+    # Get data from cache                      
+    param, cod, res, is_new, mtp, time0, time1, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_test = \
+            get_data(cod, param, hei, date0, date1, tz, content, filename)
+        
+    if res == 'monthly':
+        return empty_plot('No hourly data available'), {'display':'flex'}, {'display':'block'}, \
+            {'display':'none'}, {'display':'none'}, {'display':'flex', 'margin-top':'50px'}
+        
+    df_train = pd.read_json(df_train, orient='columns')
+    df_test = pd.read_json(df_test, orient='columns')
+    y_pred = pd.read_json(y_pred, orient='index', typ='series')
+    anom_score = pd.read_json(anom_score, orient='index', typ='series')
+    score_train = pd.read_json(score_train, orient='index')
+    score_test = pd.read_json(score_test, orient='index')
+    
+    # Prepare data for hourly plot
+    df_test, flags_cum_yellow, i_yellow, i_red = \
+        process_hourly(param, df_train, df_test, anom_score, score_train, score_test, cams_on, selected_q)
     
     # Create data frame for pie chart
     df_pie = pd.DataFrame({'color':['green','yellow','red'],
@@ -1480,8 +1524,8 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                 else:
                     n = np.sum(flags_cum_diff[i_blocks[i]+1:i_blocks[i+1]])
                     last_pos = i_blocks[i+1]
-                time1 = t_flag + timedelta(hours=n)
-                fig.add_vrect(x0=t_flag, x1=time1, fillcolor='gold', opacity=0.3, line_width=0,
+                t1 = t_flag + timedelta(hours=n)
+                fig.add_vrect(x0=t_flag, x1=t1, fillcolor='gold', opacity=0.3, line_width=0,
                               row=1, col=1)
         
     # Plot flags
@@ -1543,16 +1587,10 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                               'itemsizing': 'constant'},
                       margin={'t':75}, barmode='overlay', width=1600, height=600)
     
-    out = [param, cod, res, is_new,
-           df_train.to_json(date_format='iso', orient='columns'),
-           df_test.to_json(date_format='iso', orient='columns'),
-           y_pred.to_json(date_format='iso', orient='index')] 
-    
     return fig, {'display':'flex'}, {'display':'block'}, \
         {'display':'flex', 'align-items':'center', 'justify-content':'center'}, \
         {'display':'flex', 'padding-left':'25px'}, \
-        {'display':'flex', 'margin-top':'50px'}, \
-        out
+        {'display':'flex', 'margin-top':'50px'}
         
         
 @callback(Output('export-csv-hourly', 'data'),
@@ -1560,16 +1598,30 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
           Input('btn_csv_hourly', 'n_clicks'),
           Input('cams-switch-1', 'on'),
           Input('threshold-slider', 'value'),
-          Input('export-data-hourly', 'data'),
+          Input('input-data', 'data'),
           prevent_initial_call=True)
 def export_csv_hourly(n_clicks, cams_on, selected_q, input_data):
     if (n_clicks == 0) or (n_clicks is None):
         raise PreventUpdate
-        
-    param, cod, res, is_new, df_train, df_test, y_pred = input_data
-        
+    
+    # Get input data from browser memory
+    cod, param, hei, date0, date1, tz, content, filename = input_data
+    
+    # Get data from cache                      
+    param, cod, res, is_new, mtp, time0, time1, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_test = \
+            get_data(cod, param, hei, date0, date1, tz, content, filename)
+    
+    df_train = pd.read_json(df_train, orient='columns')
     df_test = pd.read_json(df_test, orient='columns')
     y_pred = pd.read_json(y_pred, orient='index', typ='series')
+    anom_score = pd.read_json(anom_score, orient='index', typ='series')
+    score_train = pd.read_json(score_train, orient='index')
+    score_test = pd.read_json(score_test, orient='index')
+    
+    # Get flags
+    df_test, flags_cum_yellow, i_yellow, i_red = \
+        process_hourly(param, df_train, df_test, anom_score, score_train, score_test, cams_on, selected_q)  
         
     # Define filename for export file
     outfile = cod + '_' + param + '_' + \
@@ -1604,28 +1656,8 @@ def toggle_collapse_1(n, is_open):
     return is_open
 
 
-@callback(Output('graph-monthly', 'figure'),
-          Output('div-monthly', 'style'),
-          Output('div-text-2', 'style'),
-          Output('export-data-monthly', 'data'),
-          Input('points-switch', 'on'),
-          Input('cams-switch-2', 'on'),
-          Input('trend-radio', 'value'),
-          Input('length-slider', 'value'),
-          Input('input-data', 'data'))
-def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
-    if input_data == []:
-        raise PreventUpdate
-              
-    if input_data is None:
-        return empty_plot(''), {'display':'none'}, {'display':'none'}, None
-
-    param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
-        y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
-        
-    df_mon = pd.read_json(df_mon, orient='columns')
-    df_monplot = pd.read_json(df_monplot, orient='columns')
-    y_pred_mon = pd.read_json(y_pred_mon, orient='index', typ='series')
+# Fit SARIMA model and flag monthly data for plot and export
+def process_monthly(df_monplot, mtp, max_length, selected_trend, param):
     df_monplot['prediction'] = np.nan
     df_monplot['upper'] = np.nan
     df_monplot['lower'] = np.nan
@@ -1639,53 +1671,87 @@ def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
     df_monplot['lower'] = confidence_int['lower '+param]
     df_monplot.loc[df_monplot.index.isin(flags.index), 'flag'] = True
     
+    return df_monplot, df_sar, fcst, confidence_int, flags
+
+
+@callback(Output('graph-monthly', 'figure'),
+          Output('div-monthly', 'style'),
+          Output('div-text-2', 'style'),
+          Input('points-switch', 'on'),
+          Input('cams-switch-2', 'on'),
+          Input('trend-radio', 'value'),
+          Input('length-slider', 'value'),
+          Input('input-data', 'data'))
+def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
+    if input_data == []:
+        raise PreventUpdate
+              
+    if input_data is None:
+        return empty_plot(''), {'display':'none'}, {'display':'none'}
+
+    # Get input data from browser memory
+    cod, param, hei, date0, date1, tz, content, filename = input_data
+    
+    # Get data from cache                      
+    param, cod, res, is_new, mtp, time0, time1, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_test = \
+            get_data(cod, param, hei, date0, date1, tz, content, filename)
+        
+    df_mon = pd.read_json(df_mon, orient='columns')
+    df_monplot = pd.read_json(df_monplot, orient='columns')
+    y_pred_mon = pd.read_json(y_pred_mon, orient='index', typ='series')
+    
+    # Prepare data for monthly plot
+    df_monplot, df_sar, fcst, confidence_int, flags = \
+        process_monthly(df_monplot, mtp, max_length, selected_trend, param)
+    
     # Plot
     fig = go.Figure(layout=go.Layout(width=1200, height=600))
     # SARIMA
     if (mtp > 1) & (not points_on): # plot a line + filled area
         fig.add_trace(go.Scatter(x=confidence_int.index, 
-                                 y=confidence_int['lower '+param], 
-                                 mode='lines', line=dict(color='orange',width=0.1), 
-                                 showlegend=False, hoverinfo='skip'))
+                                  y=confidence_int['lower '+param], 
+                                  mode='lines', line=dict(color='orange',width=0.1), 
+                                  showlegend=False, hoverinfo='skip'))
         fig.add_trace(go.Scatter(x=confidence_int.index, 
-                                 y=confidence_int['upper '+param],
-                                 mode='lines', line=dict(color='orange',width=0.1), 
-                                 fill='tonextx', hoverinfo='skip',
-                                 name=str(int(100*(1-p_conf)))+'% confidence range'))
+                                  y=confidence_int['upper '+param],
+                                  mode='lines', line=dict(color='orange',width=0.1), 
+                                  fill='tonextx', hoverinfo='skip',
+                                  name=str(int(100*(1-p_conf)))+'% confidence range'))
         fig.add_trace(go.Scatter(x=fcst.index, y=fcst, 
-                                 mode='lines', line=dict(color='orange',width=1.5), 
-                                 name='SARIMA'))
+                                  mode='lines', line=dict(color='orange',width=1.5), 
+                                  name='SARIMA'))
     else: # plot a point + error bars
         confidence_int['upper '+param] -= fcst
         fig.add_trace(go.Scatter(x=fcst.index, y=fcst, mode='markers',
-                                 marker_color='orange', marker_size=10,
-                                 error_y=dict(type='data',visible=True,
+                                  marker_color='orange', marker_size=10,
+                                  error_y=dict(type='data',visible=True,
                                               array=confidence_int['upper '+param]),
-                                 name='SARIMA'))
+                                  name='SARIMA'))
     # CAMS    
     if cams_on & (param != 'co2'):
         df_cams = df_monplot[param+'_cams'].iloc[-mtp:]
         fig.add_trace(go.Scatter(x=y_pred_mon.index, y=y_pred_mon, mode='markers', 
-                                 marker_color='royalblue', marker_size=11, marker_symbol='star', 
-                                 name='CAMS + ML'))
+                                  marker_color='royalblue', marker_size=11, marker_symbol='star', 
+                                  name='CAMS + ML'))
         fig.add_trace(go.Scatter(x=df_cams.index, y=df_cams, mode='markers', 
-                                 marker_color='white', marker_size=8, marker_symbol='diamond', 
-                                 marker_line_color='gray', marker_line_width=2, name='CAMS'))        
+                                  marker_color='white', marker_size=8, marker_symbol='diamond', 
+                                  marker_line_color='gray', marker_line_width=2, name='CAMS'))        
 
     # Measurements
     if points_on:
         fig.add_trace(go.Scatter(x=df_sar.index, y=df_sar, 
-                                 mode='markers', marker_color='black', marker_size=8, 
-                                 name='Measurements'))
+                                  mode='markers', marker_color='black', marker_size=8, 
+                                  name='Measurements'))
     else:
         fig.add_trace(go.Scatter(x=df_sar.index, y=df_sar, 
-                                 mode='lines+markers', marker_color='black', marker_size=8, 
-                                 line_color='black', name='Measurements'))
+                                  mode='lines+markers', marker_color='black', marker_size=8, 
+                                  line_color='black', name='Measurements'))
     # Flags
     if flags.shape[0] > 0:
         fig.add_trace(go.Scatter(x=flags.index, y=flags, mode='markers',
-                                 marker_color='red', marker_size=20, marker_symbol='circle-open', 
-                                 marker_line_width=3, name='Flag', showlegend=False))
+                                  marker_color='red', marker_size=20, marker_symbol='circle-open', 
+                                  marker_line_width=3, name='Flag', showlegend=False))
         
     # Add logo Empa
     fig = add_logo(fig, 0.0, 0.0, 0.1, 0.2)
@@ -1695,7 +1761,7 @@ def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
     fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True, tickfont_size=14)
     meta = metadata[metadata['gaw_id']==cod] 
     fig.update_layout(title={'text':meta['name'].item() + ' (' + cod + '): monthly means', 
-                             'xanchor':'center', 'x':0.5},
+                              'xanchor':'center', 'x':0.5},
                       legend={'orientation':'h', 'xanchor':'left', 'x':0.0,
                               'yanchor':'bottom', 'y':1.01, 
                               'traceorder':'reversed'}, 
@@ -1703,12 +1769,7 @@ def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
                       yaxis_title=param.upper() + ' mole fraction ' + 
                                       ('(ppm)' if param=='co2' else '(ppb)'))
     
-    out = [param, cod, res, is_new, mtp,
-           df_mon.to_json(date_format='iso', orient='columns'),
-           df_monplot.to_json(date_format='iso', orient='columns'),
-           y_pred_mon.to_json(date_format='iso', orient='index')] 
-    
-    return fig, {'display':'block'}, {'display':'flex', 'margin-top':'75px'}, out
+    return fig, {'display':'block'}, {'display':'flex', 'margin-top':'75px'}
 
 
 @callback(Output('export-csv-monthly', 'data'),
@@ -1718,19 +1779,29 @@ def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
           Input('trend-radio', 'value'),
           Input('trend-radio', 'options'),
           Input('length-slider', 'value'),
-          Input('export-data-monthly', 'data'),
+          Input('input-data', 'data'),
           prevent_initial_call=True)
 def export_csv_monthly(n_clicks, cams_on, selected_trend, label_trend, max_length, input_data):
     if (n_clicks == 0) or (n_clicks is None):
         raise PreventUpdate
 
-    param, cod, res, is_new, mtp, df_mon, df_monplot, y_pred_mon = input_data
+    # Get input data from browser memory
+    cod, param, hei, date0, date1, tz, content, filename = input_data
+    
+    # Get data from cache                      
+    param, cod, res, is_new, mtp, time0, time1, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_test = \
+            get_data(cod, param, hei, date0, date1, tz, content, filename)
         
     df_mon = pd.read_json(df_mon, orient='columns')
     df_monplot = pd.read_json(df_monplot, orient='columns')
     y_pred_mon = pd.read_json(y_pred_mon, orient='index', typ='series')
     label_trend = pd.DataFrame(label_trend)
     label_trend = label_trend['label'][label_trend['value']==selected_trend].item()
+    
+    # Get SARIMA prediction and flags
+    df_monplot, df_sar, fcst, confidence_int, flags = \
+        process_monthly(df_monplot, mtp, max_length, selected_trend, param)
         
     # Define filename for export file
     outfile = cod + '_' + param + '_' + \
@@ -1741,16 +1812,16 @@ def export_csv_monthly(n_clicks, cams_on, selected_trend, label_trend, max_lengt
     # Create data frame for export
     length = np.min([df_mon.shape[0], max_length*12 + mtp])
     df_exp = pd.DataFrame({'Time':df_monplot.index[-mtp:], 
-                           'Value':df_monplot[param].iloc[-mtp:],
-                           'N measurements':df_monplot['n'].iloc[-mtp:],
-                           'SARIMA (best estimate)':df_monplot['prediction'].iloc[-mtp:],
-                           'SARIMA (lower limit)':df_monplot['lower'].iloc[-mtp:],
-                           'SARIMA (upper limit)':df_monplot['upper'].iloc[-mtp:],
-                           'CAMS':np.nan,
-                           'CAMS + ML':np.nan,
-                           'Flag':0, 
-                           'Years used':int((length-mtp)/12),
-                           'Trend':label_trend})
+                            'Value':df_monplot[param].iloc[-mtp:],
+                            'N measurements':df_monplot['n'].iloc[-mtp:],
+                            'SARIMA (best estimate)':df_monplot['prediction'].iloc[-mtp:],
+                            'SARIMA (lower limit)':df_monplot['lower'].iloc[-mtp:],
+                            'SARIMA (upper limit)':df_monplot['upper'].iloc[-mtp:],
+                            'CAMS':np.nan,
+                            'CAMS + ML':np.nan,
+                            'Flag':0, 
+                            'Years used':int((length-mtp)/12),
+                            'Trend':label_trend})
     df_exp.loc[df_exp['Time'].isin(df_monplot.index[df_monplot['flag']]), 'Flag'] = 1
     if cams_on & (param != 'co2'):
         df_exp['CAMS'] = df_monplot[param+'_cams'].iloc[-mtp:]
@@ -1783,8 +1854,13 @@ def update_figure_3(points_on, n_years, input_data):
     if input_data is None:
         return empty_plot(''), {'display':'none'}, {'display':'none'}
     
-    param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
-        y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
+    # Get input data from browser memory
+    cod, param, hei, date0, date1, tz, content, filename = input_data
+    
+    # Get data from cache                      
+    param, cod, res, is_new, mtp, time0, time1, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_test = \
+            get_data(cod, param, hei, date0, date1, tz, content, filename)
         
     df_train = pd.read_json(df_train, orient='columns')
     df_test = pd.read_json(df_test, orient='columns')
@@ -1810,7 +1886,7 @@ def update_figure_3(points_on, n_years, input_data):
     # Calculate diurnal cycle and number of available days per hour
     if res != 'monthly':
         dc = df_train_sel_diurnal[[param]].groupby(df_train_sel_diurnal.index.hour).mean().round(2)
-        dc_val = df_test[[param]].groupby(df_test.index.hour).mean().round(2)
+        dc_test = df_test[[param]].groupby(df_test.index.hour).mean().round(2)
         dc_n = df_test[[param]].groupby(df_test.index.hour).count()
     
     # Calculate mean seasonal cycle
@@ -1839,34 +1915,34 @@ def update_figure_3(points_on, n_years, input_data):
                 dc_train_year = df_train_year[[param]].groupby(df_train_year.index.hour).mean().round(2)
                 if points_on:
                     fig.add_trace(go.Scatter(x=x_labels, y=dc_train_year[param], mode='markers',
-                                             marker_size=4, marker_color=colors[iy-firstyear-n_years], 
-                                             customdata=df_train_year[[param]].groupby(df_train_year.index.hour).count(),
-                                             hovertemplate='%{y} (N=%{customdata})',
-                                             name=str(iy), showlegend=False),
+                                              marker_size=4, marker_color=colors[iy-firstyear-n_years], 
+                                              customdata=df_train_year[[param]].groupby(df_train_year.index.hour).count(),
+                                              hovertemplate='%{y} (N=%{customdata})',
+                                              name=str(iy), showlegend=False),
                                   row=1, col=1)                   
                 else:
                     fig.add_trace(go.Scatter(x=x_labels, y=dc_train_year[param], mode='lines',
-                                             line_width=1, line_color=colors[iy-firstyear-n_years], 
-                                             customdata=df_train_year[[param]].groupby(df_train_year.index.hour).count(),
-                                             hovertemplate='%{y} (N=%{customdata})',
-                                             name=str(iy), showlegend=False),
+                                              line_width=1, line_color=colors[iy-firstyear-n_years], 
+                                              customdata=df_train_year[[param]].groupby(df_train_year.index.hour).count(),
+                                              hovertemplate='%{y} (N=%{customdata})',
+                                              name=str(iy), showlegend=False),
                                   row=1, col=1)
         if n_years > 1:
             if points_on:
                 fig.add_trace(go.Scatter(x=x_labels, y=dc[param], mode='markers',
-                                         marker_size=8, marker_color='royalblue',
-                                         name=period_label, showlegend=False),
+                                          marker_size=8, marker_color='royalblue',
+                                          name=period_label, showlegend=False),
                               row=1, col=1)                
             else:
                 fig.add_trace(go.Scatter(x=x_labels, y=dc[param], mode='lines',
-                                         line_width=5, line_color='royalblue',
-                                         name=period_label, showlegend=False),
+                                          line_width=5, line_color='royalblue',
+                                          name=period_label, showlegend=False),
                               row=1, col=1)
-        fig.add_trace(go.Scatter(x=x_labels, y=dc_val[param], mode='markers', 
-                                 marker_color='black', marker_size=10, marker_symbol='circle',
-                                 customdata=dc_n[param],
-                                 hovertemplate='%{y} (N=%{customdata})',
-                                 name=label, showlegend=False),
+        fig.add_trace(go.Scatter(x=x_labels, y=dc_test[param], mode='markers', 
+                                  marker_color='black', marker_size=10, marker_symbol='circle',
+                                  customdata=dc_n[param],
+                                  hovertemplate='%{y} (N=%{customdata})',
+                                  name=label, showlegend=False),
                       row=1, col=1)
     else:
         fig = empty_subplot(fig, 'No hourly data available', 1, 1)
@@ -1876,28 +1952,28 @@ def update_figure_3(points_on, n_years, input_data):
         df_mon_year = df_mon_sel[df_mon_sel.index.year==iy]
         if points_on:
             fig.add_trace(go.Scatter(x=df_mon_year.index.month, y=df_mon_year[param], mode='markers',
-                                     marker_size=4, marker_color=colors[iy-firstyear-n_years], 
-                                     name=str(iy)),
+                                      marker_size=4, marker_color=colors[iy-firstyear-n_years], 
+                                      name=str(iy)),
                           row=1, col=2)
         else:
             fig.add_trace(go.Scatter(x=df_mon_year.index.month, y=df_mon_year[param], mode='lines',
-                                     line_width=1, line_color=colors[iy-firstyear-n_years], 
-                                     name=str(iy)),
+                                      line_width=1, line_color=colors[iy-firstyear-n_years], 
+                                      name=str(iy)),
                           row=1, col=2)            
     if n_years > 1:
         if points_on:
             fig.add_trace(go.Scatter(x=sc.index, y=sc[param], mode='markers',
-                                     marker_size=8, marker_color='royalblue',
-                                     name=period_label),
+                                      marker_size=8, marker_color='royalblue',
+                                      name=period_label),
                           row=1, col=2)       
         else:
             fig.add_trace(go.Scatter(x=sc.index, y=sc[param], mode='lines',
-                                     line_width=5, line_color='royalblue',
-                                     name=period_label),
+                                      line_width=5, line_color='royalblue',
+                                      name=period_label),
                           row=1, col=2)
     fig.add_trace(go.Scatter(x=sc_new.index, y=sc_new[param], mode='markers', 
-                             marker_color='black', marker_size=10, 
-                             marker_symbol='circle', name=label),
+                              marker_color='black', marker_size=10, 
+                              marker_symbol='circle', name=label),
                   row=1, col=2)
     
     # Plot seasonal cycle of variability
@@ -1912,29 +1988,29 @@ def update_figure_3(points_on, n_years, input_data):
             df_vc.loc[vc_year.index, str(iy)] = vc_year.values
             if points_on:
                 fig.add_trace(go.Scatter(x=vc_year.index, y=vc_year, mode='markers',
-                                         marker_size=4, marker_color=colors[iy-firstyear-n_years], 
-                                         name=str(iy), showlegend=False),
+                                          marker_size=4, marker_color=colors[iy-firstyear-n_years], 
+                                          name=str(iy), showlegend=False),
                               row=1, col=3)
             else:
                 fig.add_trace(go.Scatter(x=vc_year.index, y=vc_year, mode='lines',
-                                         line_width=1, line_color=colors[iy-firstyear-n_years], 
-                                         name=str(iy), showlegend=False),
+                                          line_width=1, line_color=colors[iy-firstyear-n_years], 
+                                          name=str(iy), showlegend=False),
                               row=1, col=3)                
         if n_years > 1:
             vc_multiyear = df_vc[list(map(str,years))].mean(axis=1).round(2).values # average of all years in df_train_sel
             if points_on:
                 fig.add_trace(go.Scatter(x=df_vc.index, y=vc_multiyear, mode='markers',
-                                         marker_size=8, marker_color='royalblue',
-                                         name=period_label, showlegend=False),
+                                          marker_size=8, marker_color='royalblue',
+                                          name=period_label, showlegend=False),
                               row=1, col=3)
             else:
                 fig.add_trace(go.Scatter(x=df_vc.index, y=vc_multiyear, mode='lines',
-                                         line_width=5, line_color='royalblue',
-                                         name=period_label, showlegend=False),
+                                          line_width=5, line_color='royalblue',
+                                          name=period_label, showlegend=False),
                               row=1, col=3)
         fig.add_trace(go.Scatter(x=vc_new.index, y=vc_new[param], mode='markers', 
-                                 marker_color='black', marker_size=10, 
-                                 marker_symbol='circle', name=label, showlegend=False),
+                                  marker_color='black', marker_size=10, 
+                                  marker_symbol='circle', name=label, showlegend=False),
                       row=1, col=3)
     else:
         fig = empty_subplot(fig, 'No hourly data available', 1, 3)
@@ -1952,21 +2028,21 @@ def update_figure_3(points_on, n_years, input_data):
     fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True, tickfont_size=14)
     fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True, tickfont_size=14)
     fig.update_xaxes(title_text='Month', ticktext=month_names, tickvals=np.arange(1,13), 
-                     range=[0,13], showgrid=False, row=1, col=2)
+                      range=[0,13], showgrid=False, row=1, col=2)
     fig.update_yaxes(title_text=param.upper() + ' mole fraction ' + units,
-                     row=1, col=2)
+                      row=1, col=2)
     if res != 'monthly':
         fig.update_xaxes(title_text='Time UTC', tickformat='%H:%M', row=1, col=1)
         fig.update_yaxes(title_text=param.upper() + ' mole fraction ' + units,
-                         row=1, col=1)
+                          row=1, col=1)
         fig.update_xaxes(title_text='Month', ticktext=month_names, tickvals=np.arange(1,13), 
-                         range=[0,13], showgrid=False, row=1, col=3)
+                          range=[0,13], showgrid=False, row=1, col=3)
         fig.update_yaxes(title_text='Standard deviation of hourly ' + param.upper() + 
-                             ' mole fraction ' + units,
-                         row=1, col=3)
+                              ' mole fraction ' + units,
+                          row=1, col=3)
     fig.update_layout(title={'text':meta['name'].item() + ' (' + cod + ')', 
-                             'xanchor':'center', 'x':0.5,
-                             'yanchor':'top', 'y':0.98},
+                              'xanchor':'center', 'x':0.5,
+                              'yanchor':'top', 'y':0.98},
                       legend={'itemclick':False, 'itemdoubleclick':False},
                       margin={'t':75}, hovermode='x unified', 
                       width=1600, height=600)
@@ -1978,13 +2054,19 @@ def update_figure_3(points_on, n_years, input_data):
           Output('btn_csv_dc', 'n_clicks'),
           Input('btn_csv_dc', 'n_clicks'),
           Input('n-years', 'value'),
-          Input('export-data-hourly', 'data'),
+          Input('input-data', 'data'),
           prevent_initial_call=True)
 def export_csv_dc(n_clicks, n_years, input_data):
     if (n_clicks == 0) or (n_clicks is None):
         raise PreventUpdate
         
-    param, cod, res, is_new, df_train, df_test, y_pred = input_data
+    # Get input data from browser memory
+    cod, param, hei, date0, date1, tz, content, filename = input_data
+    
+    # Get data from cache                      
+    param, cod, res, is_new, mtp, time0, time1, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_test = \
+            get_data(cod, param, hei, date0, date1, tz, content, filename)
         
     if res == 'monthly':
         raise PreventUpdate
@@ -2005,7 +2087,7 @@ def export_csv_dc(n_clicks, n_years, input_data):
     
     # Calculate diurnal cycle and number of available days per hour
     dc = df_train_sel_diurnal[[param]].groupby(df_train_sel_diurnal.index.hour).mean().round(2)
-    dc_val = df_test[[param]].groupby(df_test.index.hour).mean().round(2)
+    dc_test = df_test[[param]].groupby(df_test.index.hour).mean().round(2)
     dc_n = df_test[[param]].groupby(df_test.index.hour).count()
         
     # Define filename for export
@@ -2016,9 +2098,9 @@ def export_csv_dc(n_clicks, n_years, input_data):
     label = 'Your data' if is_new else 'Selected period'
     period_label = 'Mean  ' + str(firstyear) + '-' + str(lastyear)
     df_exp = pd.DataFrame({'Hour':dc.index, 
-                           period_label:dc[param],
-                           label:dc_val[param],
-                           'N days':dc_n[param]})
+                            period_label:dc[param],
+                            label:dc_test[param],
+                            'N days':dc_n[param]})
     years = np.arange(firstyear, firstyear+n_years)
     for iy in years:
         if ((iy != lastyear) | (firstmonth == 1)) & (firstyear != lastyear):
@@ -2035,15 +2117,19 @@ def export_csv_dc(n_clicks, n_years, input_data):
           Output('btn_csv_sc', 'n_clicks'),
           Input('btn_csv_sc', 'n_clicks'),
           Input('n-years', 'value'),
-          Input('export-data-hourly', 'data'),
-          Input('export-data-monthly', 'data'),
+          Input('input-data', 'data'),
           prevent_initial_call=True)
-def export_csv_sc(n_clicks, n_years, input_data_h, input_data_m):
+def export_csv_sc(n_clicks, n_years, input_data):
     if (n_clicks == 0) or (n_clicks is None):
         raise PreventUpdate
         
-    param, cod, res, is_new, df_train, df_test, y_pred = input_data_h      
-    param, cod, res, is_new, mtp, df_mon, df_monplot, y_pred_mon = input_data_m
+    # Get input data from browser memory
+    cod, param, hei, date0, date1, tz, content, filename = input_data
+    
+    # Get data from cache                      
+    param, cod, res, is_new, mtp, time0, time1, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_test = \
+            get_data(cod, param, hei, date0, date1, tz, content, filename)
     
     df_train = pd.read_json(df_train, orient='columns')
     df_test = pd.read_json(df_test, orient='columns')
@@ -2069,8 +2155,8 @@ def export_csv_sc(n_clicks, n_years, input_data_h, input_data_m):
     label = 'Your data' if is_new else 'Selected period'
     period_label = 'Mean  ' + str(firstyear) + '-' + str(lastyear)    
     df_exp = pd.DataFrame({'Month':np.arange(1,13), 
-                           period_label:np.nan,
-                           label:np.nan})
+                            period_label:np.nan,
+                            label:np.nan})
     df_exp.set_index(df_exp['Month'], inplace=True)
     df_exp.loc[sc_new.index, label] = sc_new[param].values
     df_exp.loc[sc.index, period_label] = sc[param]    
@@ -2089,13 +2175,19 @@ def export_csv_sc(n_clicks, n_years, input_data_h, input_data_m):
           Output('btn_csv_vc', 'n_clicks'),
           Input('btn_csv_vc', 'n_clicks'),
           Input('n-years', 'value'),
-          Input('export-data-hourly', 'data'),
+          Input('input-data', 'data'),
           prevent_initial_call=True)
 def export_csv_vc(n_clicks, n_years, input_data):
     if (n_clicks == 0) or (n_clicks is None):
         raise PreventUpdate
         
-    param, cod, res, is_new, df_train, df_test, y_pred = input_data
+    # Get input data from browser memory
+    cod, param, hei, date0, date1, tz, content, filename = input_data
+    
+    # Get data from cache                      
+    param, cod, res, is_new, mtp, time0, time1, df_train, df_test, df_mon, df_monplot, \
+        y_pred, y_pred_mon, anom_score, score_train, score_test = \
+            get_data(cod, param, hei, date0, date1, tz, content, filename)
         
     if res == 'monthly':
         raise PreventUpdate
@@ -2126,8 +2218,8 @@ def export_csv_vc(n_clicks, n_years, input_data):
     label = 'Your data' if is_new else 'Selected period'
     period_label = 'Mean  ' + str(firstyear) + '-' + str(lastyear)         
     df_exp = pd.DataFrame({'Month':np.arange(1,13), 
-                           period_label:np.nan,
-                           label:np.nan})
+                            period_label:np.nan,
+                            label:np.nan})
     df_exp.set_index(df_exp['Month'], inplace=True)
     df_exp.loc[vc_new.index, label] = vc_new[param].values   
     if n_years == 1: # remove multi-year average if there is only one year
