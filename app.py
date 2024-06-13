@@ -144,11 +144,11 @@ def filter_data(df, res, thr_h, thr_m, w):
     par = df.columns[0]
     if res == 'hourly':
         running_max = df['n_meas'].rolling(w, min_periods=1, center=True).max()
-        df.loc[df['n_meas']<thr_h*running_max, par] = np.nan
+        df.loc[(df['n_meas']>0) & (df['n_meas']<thr_h*running_max), par] = np.nan
     else:
         df.loc[(df['n_meas']>0) & (df['n_meas']<thr_m), par] = np.nan
         
-    return df.drop(columns=['n_meas'])
+    return df
 
 
 def read_meta(db_file):
@@ -268,6 +268,7 @@ def parse_data(content, filename, par, tz):
         print('Could not convert data column to numeric')
         return []
     df_up.loc[df_up[par]<0, par] = np.nan # assign NaN to all negative values
+    df_up['n_meas'] = np.nan
     
     return df_up
         
@@ -612,7 +613,8 @@ app.layout = html.Div([
                                    href='https://www.empa.ch/web/s503/qa-sac-switzerland',
                                    target='_blank'),
                             ' at Empa, which is supported by the Federal Office of Meteorology MeteoSwiss',
-                            ' in the framework of the Global Atmosphere Watch Programme of the World Meteorological Organization.'
+                            ' in the framework of the Global Atmosphere Watch Programme of the World Meteorological Organization.',
+                            ' Technical support was provided by the Scientific IT department at Empa.'
                             ]),
                         html.P([
                             'Use of the output is free within the limits of the underlying data policies; ',
@@ -724,6 +726,14 @@ app.layout = html.Div([
             ], style={'display':'none'}, id='div-switch'),
                       
         # Hourly plot
+        html.Div([
+            html.P([
+                'The first panel shows time series of hourly means.',
+                ' The yellow and red circles indicate anomalous outliers;',
+                ' the shaded areas indicate periods of systematic biases with respect to CAMS-derived predictions.',
+                ' Click on the Help button for more information.'
+                ])
+            ], id='div-text-1', style={'display':'none'}),
         html.Div([
             html.Div([
                 dcc.Loading(
@@ -856,6 +866,13 @@ app.layout = html.Div([
     
         # Monthly plot
         html.Div([
+            html.P([
+                'The second panel shows time series of monthly means, including a few years of historical data.',
+                ' The red circles indicate anomalous outliers.',
+                ' Click on the Help button for more information.'
+                ])
+            ], id='div-text-2', style={'display':'none'}),
+        html.Div([
             html.Div([
                 html.Div([
                     dcc.Loading(
@@ -972,7 +989,14 @@ app.layout = html.Div([
                 ], style={'display':'flex', 'padding-left':'25px'})
             ], className='main', style={'display':'none'}, id='div-monthly'),
         
-        # Other plots   
+        # Other plots
+        html.Div([
+            html.P([
+                'The third panel shows comparisons with other years for diurnal, seasonal, and variability cycle.',
+                ' The analyzed data is represented by black dots.',
+                ' Click on the Help button for more information.'
+                ])
+            ], id='div-text-3', style={'display':'none'}),
         html.Div([
             html.Div([
                 dcc.Loading(
@@ -1056,7 +1080,7 @@ app.layout = html.Div([
                 ], style={'display':'flex', 'padding-left':'25px'})
             ], className='main', style={'display':'none'}, id='div-cycles')
         
-        ], style={'margin-top':'50px', 'margin-bottom':'25px'}),
+        ], style={'margin-top':'50px', 'margin-bottom':'50px'}),
     
     html.Div([
         html.A('Report bug', href='mailto:yuri.brugnara@empa.ch')
@@ -1250,9 +1274,9 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
             df_mon[par+'_cams'] = df_all[par+'_cams']
         
     # Define training and test sets
-    df_test = df_all[(df_all.index >= time0) & (df_all.index < time1+timedelta(days=1))]
+    df_test = df_all[(df_all.index >= time0) & (df_all.index < time1+timedelta(days=1))].drop(columns='n_meas')
     df_all.loc[df_all.index.isin(df_test.index), par] = np.nan
-    df_train = df_all
+    df_train = df_all.drop(columns='n_meas')
     if df_test[par].count() == 0:
         return None, None, None, None
 
@@ -1281,10 +1305,13 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
     
     # Prepare data for monthly plot
     mtp = len(df_test.index.month.unique()) # months to predict
-    n_meas = df_test[par].groupby(pd.Grouper(freq='1M',label='left')).count()
-    n_meas.index = n_meas.index + timedelta(days=1)
-    df_monplot = df_mon[df_mon.index < df_test.index[-1]].copy() # exclude data after target period
-    n_meas = n_meas[n_meas.index < df_test.index[-1]]
+    if res == 'hourly':
+        n_meas = df_test[par].groupby(pd.Grouper(freq='1M',label='left')).count()
+        n_meas.index = n_meas.index + timedelta(days=1)
+    else:
+        n_meas = df_all['n_meas']
+    df_monplot = df_mon[df_mon.index <= df_test.index[-1]].copy() # exclude data after target period
+    n_meas = n_meas[n_meas.index <= df_test.index[-1]]
     df_monplot['n'] = np.nan
     df_monplot.loc[df_monplot.index.isin(n_meas.index),'n'] = n_meas
 
@@ -1313,6 +1340,7 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
           Output('div-hourly', 'style'),
           Output('div-hourly-settings', 'style'),
           Output('div-hourly-info', 'style'),
+          Output('div-text-1', 'style'),
           Output('export-data-hourly', 'data'),
           Input('points-switch', 'on'),
           Input('cams-switch-1', 'on'),
@@ -1322,17 +1350,20 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
 def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
     if input_data == []:
         raise PreventUpdate
-            
+        
     if input_data is None:
         return empty_plot('No data available in the selected period - Try choosing a longer period'), \
-            {'display':'none'}, {'display':'block'}, {'display':'none'}, {'display':'none'}
-        
+            {'display':'none'}, {'display':'block'}, {'display':'none'}, {'display':'none'}, \
+            {'display':'none'}, None
+                  
     param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
         y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
         
+    out = [param, cod, res, is_new, df_train, df_test, y_pred] 
+        
     if res == 'monthly':
-        return empty_plot('No hourly data available'), \
-            {'display':'flex'}, {'display':'block'}, {'display':'none'}, {'display':'none'}
+        return empty_plot('No hourly data available'), {'display':'flex'}, {'display':'block'}, \
+            {'display':'none'}, {'display':'none'}, {'display':'flex', 'margin-top':'50px'}, out
         
     df_train = pd.read_json(df_train, orient='columns')
     df_test = pd.read_json(df_test, orient='columns')
@@ -1410,7 +1441,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
     if cams_on & (param != 'co2'):
         if points_on:
             fig.add_trace(go.Scatter(x=df_test.index, y=df_test[param+'_cams'], mode='markers',
-                                     hoverinfo='skip', marker_color='gray', marker_size=2,
+                                     hoverinfo='skip', marker_color='silver', marker_size=2,
                                      name='CAMS'),
                           row=1, col=1)
             fig.add_trace(go.Scatter(x=y_pred.index, y=y_pred, mode='markers', 
@@ -1419,7 +1450,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                           row=1, col=1)            
         else:
             fig.add_trace(go.Scatter(x=df_test.index, y=df_test[param+'_cams'], mode='lines', 
-                                     hoverinfo='skip', line_color='gray', line_width=0.75,
+                                     hoverinfo='skip', line_color='silver', line_width=0.75,
                                      name='CAMS'),
                           row=1, col=1) 
             fig.add_trace(go.Scatter(x=y_pred.index, y=y_pred, mode='lines', 
@@ -1472,7 +1503,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                   row=2, col=2)
     if cams_on & (param != 'co2'):
         fig.add_trace(go.Histogram(x=df_test[param+'_cams'], histnorm='probability', 
-                                   name='CAMS', marker_color='gray',
+                                   name='CAMS', marker_color='silver',
                                    xbins=dict(size=bin_size), showlegend=False),
                       row=2, col=2)        
         fig.add_trace(go.Histogram(x=y_pred, histnorm='probability', 
@@ -1516,7 +1547,9 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
     
     return fig, {'display':'flex'}, {'display':'block'}, \
         {'display':'flex', 'align-items':'center', 'justify-content':'center'}, \
-        {'display':'flex', 'padding-left':'25px'}, out
+        {'display':'flex', 'padding-left':'25px'}, \
+        {'display':'flex', 'margin-top':'50px'}, \
+        out
         
         
 @callback(Output('export-csv-hourly', 'data'),
@@ -1570,6 +1603,7 @@ def toggle_collapse_1(n, is_open):
 
 @callback(Output('graph-monthly', 'figure'),
           Output('div-monthly', 'style'),
+          Output('div-text-2', 'style'),
           Output('export-data-monthly', 'data'),
           Input('points-switch', 'on'),
           Input('cams-switch-2', 'on'),
@@ -1581,7 +1615,7 @@ def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
         raise PreventUpdate
               
     if input_data is None:
-        return empty_plot(''), {'display':'none'}
+        return empty_plot(''), {'display':'none'}, {'display':'none'}, None
 
     param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
         y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
@@ -1671,7 +1705,7 @@ def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
            df_monplot.to_json(date_format='iso', orient='columns'),
            y_pred_mon.to_json(date_format='iso', orient='index')] 
     
-    return fig, {'display':'block'}, out
+    return fig, {'display':'block'}, {'display':'flex', 'margin-top':'75px'}, out
 
 
 @callback(Output('export-csv-monthly', 'data'),
@@ -1735,6 +1769,7 @@ def toggle_collapse_2(n, is_open):
 
 @callback(Output('graph-cycles', 'figure'),
           Output('div-cycles', 'style'),
+          Output('div-text-3', 'style'),
           Input('points-switch', 'on'),
           Input('n-years', 'value'),
           Input('input-data', 'data'))
@@ -1743,7 +1778,7 @@ def update_figure_3(points_on, n_years, input_data):
         raise PreventUpdate
               
     if input_data is None:
-        return empty_plot(''), {'display':'none'}
+        return empty_plot(''), {'display':'none'}, {'display':'none'}
     
     param, cod, res, is_new, mtp, df_train, df_test, df_mon, df_monplot, \
         y_pred, y_pred_mon, anom_score, score_train, score_val = input_data
@@ -1758,7 +1793,7 @@ def update_figure_3(points_on, n_years, input_data):
     lastyear = df_train[param].dropna().index.year[-1]
     firstyear = lastyear - n_years + 1
     firstmonth = df_test.index.month[0]
-    df_mon_new = df_mon[(df_mon.index>=df_test.index[0]) & (df_mon.index<df_test.index[-1])]
+    df_mon_new = df_mon[(df_mon.index>=df_test.index[0]) & (df_mon.index<=df_test.index[-1])]
     df_mon_sel = df_mon[df_mon.index.year>=firstyear].copy()
     if is_new:
         df_all = shift_year(df_all, df_test)
@@ -1933,7 +1968,7 @@ def update_figure_3(points_on, n_years, input_data):
                       margin={'t':75}, hovermode='x unified', 
                       width=1600, height=600)
     
-    return fig, {'display':'block'}
+    return fig, {'display':'block'}, {'display':'flex', 'margin-top':'75px'}
 
 
 @callback(Output('export-csv-dc', 'data'),
@@ -2014,7 +2049,7 @@ def export_csv_sc(n_clicks, n_years, input_data_h, input_data_m):
     # Select data to be exported
     lastyear = df_train[param].dropna().index.year[-1]
     firstyear = lastyear - n_years + 1
-    df_mon_new = df_mon[(df_mon.index>=df_test.index[0]) & (df_mon.index<df_test.index[-1])]
+    df_mon_new = df_mon[(df_mon.index>=df_test.index[0]) & (df_mon.index<=df_test.index[-1])]
     df_mon_sel = df_mon[df_mon.index.year>=firstyear].copy()
     if is_new:
         df_mon_sel[df_mon_sel.index.isin(df_mon_new.index)] = np.nan
