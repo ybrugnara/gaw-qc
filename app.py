@@ -23,6 +23,7 @@ import pandas as pd
 from pandas.core.tools.datetimes import guess_datetime_format
 from datetime import date, datetime, timedelta
 import calendar
+import pytz
 import statsmodels.api as sm
 from pyod.models.lof import LOF
 from sklearn.linear_model import LinearRegression
@@ -537,6 +538,32 @@ def add_logo(fig, x, y, sx, sy):
     
     return fig
 
+
+def add_header(df, par, is_new, cams_on):
+    """ Add header with data credits to export
+    :param df: Data frame to export
+    :param par: Variable (one of ch4, co, co2, o3)
+    :param is_new: Whether the analzed data were uploaded by the user (boolean)
+    :param cams_on: Whether CAMS data are exported (boolean)
+    :return: String of comma-separated data ready for export
+    """
+    units = 'ppm' if par == 'co2' else 'ppb'
+    header = '# Mole fraction of ' + par.upper() + ' in ' + units + '.'
+    if not is_new:
+        header += ' Measurements data source: '
+        if par == 'o3':
+            header += 'World Data Centre for Reactive Gases (WDCRG - www.gaw-wdcrg.org).'
+        else:
+            header += 'World Data Centre for Greenhouse Gases (WDCGG - gaw.kishou.go.jp).'
+    if cams_on & (par != 'co2'):
+        header += ' CAMS data source: Copernicus Atmosphere Data Store (ADS - atmosphere.copernicus.eu/data).'
+    header += ' File created by the gaw-qc app on ' + \
+        datetime.now(pytz.timezone('UTC')).isoformat(sep=' ', timespec='seconds') + '.'
+    
+    out = header + '\r\n' + df.to_csv(index=False)
+    
+    return out
+        
 
 
 ### DASH APP ###
@@ -1686,8 +1713,9 @@ def export_csv_hourly(n_clicks, cams_on, selected_q, input_data):
         df_exp['Flag CAMS'] = df_test['Flag CAMS']
     else:
         df_exp.drop(columns=['CAMS','CAMS + ML','Flag CAMS'], inplace=True)
-        
-    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
+    export = add_header(df_exp, param, is_new, cams_on)
+
+    return dict(content=export, filename=outfile), 0
 
 
 @app.callback(Output('collapse-1', 'is_open'),
@@ -1872,8 +1900,9 @@ def export_csv_monthly(n_clicks, cams_on, selected_trend, label_trend, max_lengt
         df_exp['CAMS + ML'] = y_pred_mon
     else:
         df_exp.drop(columns=['CAMS','CAMS + ML'], inplace=True)
-        
-    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
+    export = add_header(df_exp, param, is_new, cams_on)
+
+    return dict(content=export, filename=outfile), 0
 
 
 @app.callback(Output('collapse-2', 'is_open'),
@@ -2126,8 +2155,9 @@ def export_csv_dc(n_clicks, n_years, input_data):
         df_exp[str(iy)] = dc[str(iy)]
     if n_years_for_mean == 1: # remove multi-year average if there is only one year
         df_exp.drop(columns=[period_label], inplace=True)
-        
-    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
+    export = add_header(df_exp, param, False, False)
+
+    return dict(content=export, filename=outfile), 0
 
 
 @callback(Output('export-csv-sc', 'data'),
@@ -2184,8 +2214,9 @@ def export_csv_sc(n_clicks, n_years, input_data):
         df_exp.loc[df_mon_year.index.month, str(iy)] = df_mon_year[param].values
     if n_years_for_mean == 1: # remove multi-year average if there is only one year
         df_exp.drop(columns=[period_label], inplace=True)
-        
-    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
+    export = add_header(df_exp, param, False, False)
+
+    return dict(content=export, filename=outfile), 0
 
 
 @callback(Output('export-csv-vc', 'data'),
@@ -2240,8 +2271,9 @@ def export_csv_vc(n_clicks, n_years, input_data):
         df_exp[str(iy)] = vc[str(iy)]
     if n_years_for_mean == 1: # remove multi-year average if there is only one year
         df_exp.drop(columns=[period_label], inplace=True)
-        
-    return dcc.send_data_frame(df_exp.to_csv, outfile, index=False), 0
+    export = add_header(df_exp, param, False, False)
+
+    return dict(content=export, filename=outfile), 0
 
 
 @app.callback(Output('collapse-3', 'is_open'),
@@ -2254,4 +2286,4 @@ def toggle_collapse_3(n, is_open):
     
     
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8000)
+    app.run(debug=True)#, host='0.0.0.0', port=8000)
