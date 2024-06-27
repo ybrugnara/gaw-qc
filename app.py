@@ -59,6 +59,9 @@ n_neighbors = 100
 # SARIMAX parameter (confidence level probability for the shaded area in the plot)
 p_conf = 0.01
 
+# Minimum number of months required to fit SARIMAX
+min_months_sarima = 24
+
 # CAMS-based anomaly score parameter (minimum flaggable window size in hours)
 window_size_cams = 50
 
@@ -410,26 +413,31 @@ def forecast_sm(df_m, n, max_l, sel_t):
     df_sar = df_m[par].iloc[-length:]
     df_sar_to_predict = df_sar.iloc[-n:]
     
-    # Define and fit SARIMA model
-    sar = sm.tsa.statespace.SARIMAX(df_sar[:-n], 
-                                    order=(1,0,0), 
-                                    seasonal_order=(0,1,1,12), 
-                                    trend=sel_t,
-                                    enforce_stationarity=False).fit(disp=False)
-    
-    # Make forecast
-    future_fcst = sar.get_forecast(n)
-    confidence_int = future_fcst.conf_int(alpha=p_conf)
-    confidence_int.index = df_sar.index[-n:]
-    fcst = future_fcst.predicted_mean
-    fcst.index = df_sar.index[-n:]
-    fcst = fcst.round(2)
-    confidence_int = confidence_int.round(2)
-    
+    if df_sar.iloc[:-n].count() >= min_months_sarima:    
+        # Define and fit SARIMA model
+        sar = sm.tsa.statespace.SARIMAX(df_sar[:-n], 
+                                        order=(1,0,0), 
+                                        seasonal_order=(0,1,1,12), 
+                                        trend=sel_t,
+                                        enforce_stationarity=False).fit(disp=False)        
+        # Make forecast
+        future_fcst = sar.get_forecast(n)
+        confidence_int = future_fcst.conf_int(alpha=p_conf)
+        confidence_int.index = df_sar.index[-n:]
+        fcst = future_fcst.predicted_mean
+        fcst.index = df_sar.index[-n:]
+        fcst = fcst.round(2)
+        confidence_int = confidence_int.round(2)
+        
+    else:
+        fcst = pd.Series(n*[np.nan], index=df_sar.index[-n:])
+        confidence_int = pd.DataFrame({'upper '+par:n*[np.nan], 'lower '+par:n*[np.nan]},
+                                      index=df_sar.index[-n:])
+        
     # Flags
     flags = df_sar_to_predict[(df_sar_to_predict > confidence_int['upper '+par]) | 
                    (df_sar_to_predict < confidence_int['lower '+par])]
-  
+    
     return df_sar, fcst, confidence_int, flags
 
 
@@ -1006,7 +1014,9 @@ app.layout = html.Div([
                                 ' with ' + str(int(100*(1-p_conf))) + '% confidence range. SARIMA is a purely statistical alternative to CAMS + ML.'
                                 ' Only the data shown in the plot are considered in order to fit the model, meaning that the prediction can change by modifying the number of years. Moreover, the',
                                 html.B(' type of trend'),
-                                ' assumed by the model can be selected by the user (top-right corner).'
+                                ' assumed by the model can be selected by the user (top-right corner).',
+                                html.Br(),
+                                ' The SARIMA prediction will not be shown if less than two years of past data are available.'
                                 ]),
                             html.P([
                                 html.B('Flags'),
