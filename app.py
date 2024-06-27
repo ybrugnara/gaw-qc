@@ -1262,6 +1262,8 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
     else:
         # Parse uploaded data
         df_up = parse_data(content, filename, par, tz)
+        if not isinstance(df_up, pd.DataFrame): # file could not be read
+            return []
         time0 = df_up.index[0]
         time1 = df_up.index[-1]
         is_new = True
@@ -1435,21 +1437,21 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
         raise PreventUpdate
         
     start_time = datetime.now()
-    
     data = get_data(cod, par, hei, date0, date1, tz, content, filename)
+    stop_time = datetime.now()
     
     if data is None:
         return None, None, None, None
     
-    param, cod, res, is_new, mtp, time0, time1 = data[:7]
     out = [cod, par, hei, date0, date1, tz, content, filename]
     
     # Write log
-    stop_time = datetime.now()
-    write_log(logpath, 
-              [datetime.isoformat(start_time, sep=' ', timespec='seconds'),
-               cod, par, hei, time0, time1, int(is_new),
-               (stop_time-start_time).seconds])
+    if data != []:
+        param, cod, res, is_new, mtp, time0, time1 = data[:7]
+        write_log(logpath, 
+                  [datetime.isoformat(start_time, sep=' ', timespec='seconds'),
+                   cod, par, hei, time0, time1, int(is_new),
+                   (stop_time-start_time).seconds])
     
     return out, None, None, None
 
@@ -1510,7 +1512,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
     if input_data == []:
         raise PreventUpdate
         
-    if input_data is None:
+    if input_data is None:     
         return empty_plot('No data available in the selected period - Try choosing a longer period'), \
             {'display':'none'}, {'display':'block'}, {'display':'none'}, {'display':'none'}, \
             {'display':'none'}
@@ -1518,10 +1520,16 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
     # Get input data from browser memory
     cod, param, hei, date0, date1, tz, content, filename = input_data
     
-    # Get data from cache                      
+    # Get data from cache
+    cache_data = get_data(cod, param, hei, date0, date1, tz, content, filename)
+    
+    if cache_data == []:
+        return empty_plot('Impossible to read uploaded file - Try to change the time format or check the wiki'), \
+            {'display':'none'}, {'display':'block'}, {'display':'none'}, {'display':'none'}, \
+            {'display':'none'}
+            
     param, cod, res, is_new, mtp, time0, time1, lastyear, df_test, df_mon, df_monplot, \
-        y_pred, y_pred_mon, anom_score, score_test, thresholds, dc, vc = \
-            get_data(cod, param, hei, date0, date1, tz, content, filename)
+        y_pred, y_pred_mon, anom_score, score_test, thresholds, dc, vc = cache_data        
         
     if res == 'monthly':
         return empty_plot('No hourly data available'), {'display':'flex'}, {'display':'block'}, \
@@ -1768,10 +1776,14 @@ def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
     # Get input data from browser memory
     cod, param, hei, date0, date1, tz, content, filename = input_data
     
-    # Get data from cache                      
+    # Get data from cache
+    cache_data = get_data(cod, param, hei, date0, date1, tz, content, filename)
+
+    if cache_data == []:
+        return empty_plot(''), {'display':'none'}, {'display':'none'}
+            
     param, cod, res, is_new, mtp, time0, time1, lastyear, df_test, df_mon, df_monplot, \
-        y_pred, y_pred_mon, anom_score, score_test, thresholds, dc, vc = \
-            get_data(cod, param, hei, date0, date1, tz, content, filename)
+        y_pred, y_pred_mon, anom_score, score_test, thresholds, dc, vc = cache_data   
         
     df_mon = pd.read_json(df_mon, orient='columns')
     df_monplot = pd.read_json(df_monplot, orient='columns')
@@ -1935,10 +1947,14 @@ def update_figure_3(points_on, n_years, input_data):
     # Get input data from browser memory
     cod, param, hei, date0, date1, tz, content, filename = input_data
     
-    # Get data from cache                      
+    # Get data from cache
+    cache_data = get_data(cod, param, hei, date0, date1, tz, content, filename)
+
+    if cache_data == []:
+        return empty_plot(''), {'display':'none'}, {'display':'none'}
+            
     param, cod, res, is_new, mtp, time0, time1, lastyear, df_test, df_mon, df_monplot, \
-        y_pred, y_pred_mon, anom_score, score_test, thresholds, dc, vc = \
-            get_data(cod, param, hei, date0, date1, tz, content, filename)
+        y_pred, y_pred_mon, anom_score, score_test, thresholds, dc, vc = cache_data
         
     df_test = pd.read_json(df_test, orient='columns')
     df_mon = pd.read_json(df_mon, orient='columns')
