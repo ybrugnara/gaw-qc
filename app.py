@@ -49,6 +49,9 @@ n_min = 300
 # Maximum number of years that can be processed for the third panel
 n_years_max = 7 
 
+# Minimum date to use CAMS data
+min_date_cams = datetime(2020,1,1)
+
 # Sub-LOF parameters
 window_size = 5
 n_neighbors = 100
@@ -77,12 +80,13 @@ ml_model = ExtraTreesRegressor(criterion='squared_error', n_estimators=200,
 
 # Define functions
 
-def read_data(db_file, gaw_id, v, h):
+def read_data(db_file, gaw_id, v, h, time1):
     """ read data for the target station from the database
     :param db_file: Path of database file
     :param gaw_id: GAW id of the target station
     :param v: Variable (one of ch4, co, co2, o3)
     :param h: Height from the ground
+    :param time1: latest time to analyze
     :return: Data frame of hourly or monthly data, and a string giving the time resolution
     """
     with sqlite3.connect(db_file) as conn:
@@ -96,7 +100,7 @@ def read_data(db_file, gaw_id, v, h):
         data_gaw = cur.fetchall()        
         if len(data_gaw) > 0:
             names_gaw = [x[0] for x in cur.description]
-            if v != 'co2':
+            if (v != 'co2') & (time1 >= min_date_cams):
                 cur.execute('SELECT * FROM cams_hourly WHERE ' + \
                                 'series_id=?', (series_id,))
                 data_cams = cur.fetchall()
@@ -107,7 +111,7 @@ def read_data(db_file, gaw_id, v, h):
                             'series_id=?', (series_id,))
             data_gaw = cur.fetchall()
             names_gaw = [x[0] for x in cur.description]
-            if v != 'co2':
+            if (v != 'co2') & (time1 >= min_date_cams):
                 cur.execute('SELECT * FROM cams_monthly WHERE ' + \
                                 'series_id=?', (series_id,))
                 data_cams = cur.fetchall()
@@ -117,7 +121,7 @@ def read_data(db_file, gaw_id, v, h):
     out_gaw = pd.DataFrame(data_gaw, columns=names_gaw)
     out_gaw.rename(columns={'value':v}, inplace=True)
     
-    if v == 'co2':
+    if (v == 'co2') | (time1 < min_date_cams):
         out = out_gaw
     elif len(data_cams) == 0:
         raise Exception('CAMS data not found for this station')
@@ -539,12 +543,13 @@ def add_logo(fig, x, y, sx, sy):
     return fig
 
 
-def add_header(df, par, is_new, cams_on):
+def add_header(df, par, is_new, cams_on, time1):
     """ Add header with data credits to export
     :param df: Data frame to export
     :param par: Variable (one of ch4, co, co2, o3)
     :param is_new: Whether the analzed data were uploaded by the user (boolean)
     :param cams_on: Whether CAMS data are exported (boolean)
+    :param time1: latest time to analyze
     :return: String of comma-separated data ready for export
     """
     units = 'ppm' if par == 'co2' else 'ppb'
@@ -555,7 +560,7 @@ def add_header(df, par, is_new, cams_on):
             header += 'World Data Centre for Reactive Gases (WDCRG - www.gaw-wdcrg.org).'
         else:
             header += 'World Data Centre for Greenhouse Gases (WDCGG - gaw.kishou.go.jp).'
-    if cams_on & (par != 'co2'):
+    if cams_on & (par != 'co2') & (time1 >= min_date_cams):
         header += ' CAMS data source: Copernicus Atmosphere Data Store (ADS - atmosphere.copernicus.eu/data).'
     header += ' File created by the gaw-qc app on ' + \
         datetime.now(pytz.timezone('UTC')).isoformat(sep=' ', timespec='seconds') + '.'
@@ -1199,9 +1204,6 @@ def update_dates(cod, par, hei):
     if d1 is None:
         return None, None, None, 'hide'
     
-    if d0 < '2020-01-01':
-        d0 = '2020-01-01'
-    
     return datetime.strptime(d0, '%Y-%m-%d'), datetime.strptime(d1, '%Y-%m-%d'), \
         date(int(d1[:4]), 1, 1), 'auto'
         
@@ -1211,7 +1213,7 @@ def update_dates(cod, par, hei):
           Input('upload-data', 'contents'),
           prevent_initial_call=True)
 def update_tz(tz, content):
-    if (tz != None) | (content is None):
+    if (tz is not None) | (content is None):
         raise PreventUpdate
         
     return 'UTC'
@@ -1274,39 +1276,42 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
         n_max = 365
     if (time1-time0).days > n_max-1:
         time0 = time1 - timedelta(days=n_max) + timedelta(hours=1)
-        if content != None:
+        if content is not None:
             df_up = df_up[df_up.index >= time0]
     
     # Read data and remove values based on insufficient measurements
-    df_all, res = read_data(inpath, cod, par, hei)
+    df_all, res = read_data(inpath, cod, par, hei, time1)
     df_all = filter_data(df_all, res, 0.25, 15, 5)
     
     # Calculate monthly means of uploaded data
-    if (res == 'monthly') & (content != None):
+    if (res == 'monthly') & (content is not None):
         df_up = df_up.groupby(pd.Grouper(freq='1M',label='left')).mean()
         df_up.index = df_up.index + timedelta(days=1)
             
     # Merge uploaded data with historical data
-    if content != None:
-        if par == 'co2':
+    if content is not None:
+        df_all.loc[(df_all.index>=time0) & (df_all.index<=time1), par] = np.nan
+        if (par == 'co2') | (time1 < min_date_cams):
             df_all = pd.concat([df_all, df_up])
-            df_all = df_all.groupby(df_all.index).last() # drop duplicated times (keep the last instance)
+            df_all = df_all.groupby(df_all.index).last().sort_index() # drop duplicated times (keep the last instance)
         else:
             df_all.loc[df_all.index.isin(df_up.index), par] = df_up.loc[df_up.index.isin(df_all.index), par]
-        df_all = df_all[df_all.index <= time1]
     
     # Calculate monthly means of merged data (require at least n_min measurements per month)
     if res == 'hourly':
         df_mon = monthly_means(df_all[[par]], n_min)
-        if par != 'co2':
+        if (par != 'co2') & (time1 >= min_date_cams):
             df_mon[par+'_cams'] = monthly_means(df_all[[par+'_cams']], n_min)
     else:
         df_mon = df_all[[par]].copy()
-        if par != 'co2':
+        if (par != 'co2') & (time1 >= min_date_cams):
             df_mon[par+'_cams'] = df_all[par+'_cams']
         
     # Define training and test sets
-    df_test = df_all[(df_all.index>=time0) & (df_all.index<time1+timedelta(days=1))].drop(columns='n_meas')
+    if content is None:
+        df_test = df_all[(df_all.index>=time0) & (df_all.index<time1+timedelta(days=1))].drop(columns='n_meas')
+    else:
+        df_test = df_all[(df_all.index>=time0) & (df_all.index<=time1)].drop(columns='n_meas')
     df_train = df_all.copy()
     df_train.loc[df_train.index.isin(df_test.index), par] = np.nan
     df_train = df_train.drop(columns='n_meas')
@@ -1315,7 +1320,7 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
 
     # Downscale/debias CAMS
     empty_df = df_test.drop(index=df_test.index)
-    if par == 'co2':        
+    if (par == 'co2') | (time1 < min_date_cams):        
         y_pred, y_pred_mon, anom_score = [empty_df, empty_df, empty_df]
     elif res == 'monthly':
         y_pred, anom_score = [empty_df, empty_df]
@@ -1346,7 +1351,7 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
     else:
         thresholds['LOF'] = [np.nan, np.nan, np.nan]
     
-    if (par != 'co2') & (res == 'hourly'):
+    if (par != 'co2') & (res == 'hourly') & (time1 >= min_date_cams):
         p_thrs_cams = thr0_cams + incr_cams * np.array([1,2,3])
         thresholds['CAMS lower'] = np.quantile(anom_score_train.dropna(), 1-p_thrs_cams) * 2
         thresholds['CAMS upper'] = np.quantile(anom_score_train.dropna(), p_thrs_cams) * 2
@@ -1395,7 +1400,7 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
             vc[iy] = vc_year
     
     # Wrap everything together and convert to json format for storage
-    test_cols = [par] if par == 'co2' else [par, par+'_cams']
+    test_cols = [par] if (par == 'co2') | (time1 < min_date_cams) else [par, par+'_cams']
     out = [par, cod, res, is_new, mtp, time0, time1, lastyear,
            df_test[test_cols].to_json(date_format='iso', orient='columns'),
            df_mon.to_json(date_format='iso', orient='columns'),
@@ -1450,7 +1455,7 @@ def update_data(cod, par, hei, date0, date1, tz, content, filename):
 
 
 # Flag hourly data for plot and export
-def process_hourly(param, df_test, anom_score, score_test, thresholds, cams_on, selected_q):
+def process_hourly(param, df_test, anom_score, score_test, thresholds, cams_on, selected_q, time1):
     # Flag data after Sub-LOF
     df_test['Flag LOF'] = 0
     thr_yellow = thresholds.loc[selected_q,'LOF']
@@ -1466,7 +1471,7 @@ def process_hourly(param, df_test, anom_score, score_test, thresholds, cams_on, 
     df_test.loc[df_test.index.isin(flags_red.index), 'Flag LOF'] = 2
     
     # Flag data after CAMS (yellow only; two yellow flags [LOF+CAMS] trigger a red flag)
-    if cams_on & (param != 'co2'):
+    if cams_on & (param != 'co2') & (time1 >= min_date_cams):
         df_test['Flag CAMS'] = 0
         anom_score_test = anom_score[anom_score.index.isin(df_test.index)]
         flags_cum_yellow = (anom_score_test < thresholds.loc[selected_q,'CAMS lower']) | \
@@ -1530,7 +1535,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
     
     # Prepare data for hourly plot
     df_test, flags_cum_yellow, i_yellow, i_red = \
-        process_hourly(param, df_test, anom_score, score_test, thresholds, cams_on, selected_q)
+        process_hourly(param, df_test, anom_score, score_test, thresholds, cams_on, selected_q, time1)
     
     # Create data frame for pie chart
     df_pie = pd.DataFrame({'color':['green','yellow','red'],
@@ -1556,7 +1561,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                       row=1, col=1)
 
     # Plot CAMS
-    if cams_on & (param != 'co2'):
+    if cams_on & (param != 'co2') & (time1 >= min_date_cams):
         if points_on:
             fig.add_trace(go.Scatter(x=df_test.index, y=df_test[param+'_cams'], mode='markers',
                                      hoverinfo='skip', marker_color='silver', marker_size=2,
@@ -1619,7 +1624,7 @@ def update_figure_1(points_on, cams_on, selected_q, bin_size, input_data):
                                name='Measurements', marker_color='black',
                                xbins=dict(size=bin_size), showlegend=False),
                   row=2, col=2)
-    if cams_on & (param != 'co2'):
+    if cams_on & (param != 'co2') & (time1 >= min_date_cams):
         fig.add_trace(go.Histogram(x=df_test[param+'_cams'], histnorm='probability', 
                                    name='CAMS', marker_color='silver',
                                    xbins=dict(size=bin_size), showlegend=False),
@@ -1691,7 +1696,7 @@ def export_csv_hourly(n_clicks, cams_on, selected_q, input_data):
     
     # Get flags
     df_test, flags_cum_yellow, i_yellow, i_red = \
-        process_hourly(param, df_test, anom_score, score_test, thresholds, cams_on, selected_q)  
+        process_hourly(param, df_test, anom_score, score_test, thresholds, cams_on, selected_q, time1)  
         
     # Define filename for export file
     outfile = cod + '_' + param + '_' + \
@@ -1707,13 +1712,13 @@ def export_csv_hourly(n_clicks, cams_on, selected_q, input_data):
                            'Flag LOF':df_test['Flag LOF'], 
                            'Flag CAMS':np.nan,
                            'Strictness':selected_q})
-    if cams_on & (param != 'co2'):
+    if cams_on & (param != 'co2') & (time1 >= min_date_cams):
         df_exp['CAMS'] = df_test[param+'_cams']
         df_exp['CAMS + ML'] = y_pred
         df_exp['Flag CAMS'] = df_test['Flag CAMS']
     else:
         df_exp.drop(columns=['CAMS','CAMS + ML','Flag CAMS'], inplace=True)
-    export = add_header(df_exp, param, is_new, cams_on)
+    export = add_header(df_exp, param, is_new, cams_on, time1)
 
     return dict(content=export, filename=outfile), 0
 
@@ -1800,7 +1805,7 @@ def update_figure_2(points_on, cams_on, selected_trend, max_length, input_data):
                                               array=confidence_int['upper '+param]),
                                   name='SARIMA'))
     # CAMS    
-    if cams_on & (param != 'co2'):
+    if cams_on & (param != 'co2') & (time1 >= min_date_cams):
         df_cams = df_monplot[param+'_cams'].iloc[-mtp:]
         fig.add_trace(go.Scatter(x=y_pred_mon.index, y=y_pred_mon, mode='markers', 
                                   marker_color='royalblue', marker_size=11, marker_symbol='star', 
@@ -1895,12 +1900,12 @@ def export_csv_monthly(n_clicks, cams_on, selected_trend, label_trend, max_lengt
                             'Years used':int((length-mtp)/12),
                             'Trend':label_trend})
     df_exp.loc[df_exp['Time'].isin(df_monplot.index[df_monplot['flag']]), 'Flag'] = 1
-    if cams_on & (param != 'co2'):
+    if cams_on & (param != 'co2') & (time1 >= min_date_cams):
         df_exp['CAMS'] = df_monplot[param+'_cams'].iloc[-mtp:]
         df_exp['CAMS + ML'] = y_pred_mon
     else:
         df_exp.drop(columns=['CAMS','CAMS + ML'], inplace=True)
-    export = add_header(df_exp, param, is_new, cams_on)
+    export = add_header(df_exp, param, is_new, cams_on, time1)
 
     return dict(content=export, filename=outfile), 0
 
@@ -2155,7 +2160,7 @@ def export_csv_dc(n_clicks, n_years, input_data):
         df_exp[str(iy)] = dc[str(iy)]
     if n_years_for_mean == 1: # remove multi-year average if there is only one year
         df_exp.drop(columns=[period_label], inplace=True)
-    export = add_header(df_exp, param, False, False)
+    export = add_header(df_exp, param, False, False, time1)
 
     return dict(content=export, filename=outfile), 0
 
@@ -2214,7 +2219,7 @@ def export_csv_sc(n_clicks, n_years, input_data):
         df_exp.loc[df_mon_year.index.month, str(iy)] = df_mon_year[param].values
     if n_years_for_mean == 1: # remove multi-year average if there is only one year
         df_exp.drop(columns=[period_label], inplace=True)
-    export = add_header(df_exp, param, False, False)
+    export = add_header(df_exp, param, False, False, time1)
 
     return dict(content=export, filename=outfile), 0
 
@@ -2271,7 +2276,7 @@ def export_csv_vc(n_clicks, n_years, input_data):
         df_exp[str(iy)] = vc[str(iy)]
     if n_years_for_mean == 1: # remove multi-year average if there is only one year
         df_exp.drop(columns=[period_label], inplace=True)
-    export = add_header(df_exp, param, False, False)
+    export = add_header(df_exp, param, False, False, time1)
 
     return dict(content=export, filename=outfile), 0
 
@@ -2286,4 +2291,4 @@ def toggle_collapse_3(n, is_open):
     
     
 if __name__ == '__main__':
-    app.run(debug=True)#, host='0.0.0.0', port=8000)
+    app.run(debug=True, host='0.0.0.0', port=8000)
