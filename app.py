@@ -369,14 +369,22 @@ def add_missing(timeseries):
     return out
 
 
-def monthly_means(timeseries, n_min):
-    """ calculate monthly means from hourly data (require at least n_min values per month)
+def monthly_means(timeseries, n_min, t0, t1):
+    """ Calculate monthly means from hourly data (require at least n_min values per month)
+    Data at the beginning or end of a month that is partly outside the analzed period are excluded
     :param timeseries: Data frame with one variable and time as index
     :param n_min: Integer
+    :param t0: Start time of data to analyze
+    :param t1: End time of data to analyze 
     :return: Data frame of monthly means
     """
-    out = timeseries.groupby(pd.Grouper(freq='1M',label='left')).mean().round(2)
-    n = timeseries.groupby(pd.Grouper(freq='1M',label='left')).count()
+    tmonth0 = datetime(t0.year, t0.month, 1, 0)
+    tmonth1 = datetime(t1.year, t1.month, calendar.monthrange(t1.year,t1.month)[1], 23)
+    to_drop = ((timeseries.index>=tmonth0) & (timeseries.index<t0)) | \
+        ((timeseries.index<=tmonth1) & (timeseries.index>t1))
+    tmp = timeseries.drop(index=timeseries.index[to_drop])
+    out = tmp.groupby(pd.Grouper(freq='1M',label='left')).mean().round(2)
+    n = tmp.groupby(pd.Grouper(freq='1M',label='left')).count()
     out[n<n_min] = np.nan
     out.index = out.index + timedelta(days=1) # first day of the month as index
     
@@ -479,6 +487,8 @@ def downscaling(df_train, df_test, par, w, model):
     
     # Monthly data (for SARIMA plot)  
     y_pred_mon = y_pred.groupby(pd.Grouper(freq='1M',label='left')).mean()
+    y_pred_n = y_pred.groupby(pd.Grouper(freq='1M',label='left')).count()
+    y_pred_mon[y_pred_n<n_min] = np.nan
     y_pred_mon.index = y_pred_mon.index + timedelta(days=1)
 
     # Anomaly score
@@ -1311,9 +1321,9 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
     
     # Calculate monthly means of merged data (require at least n_min measurements per month)
     if res == 'hourly':
-        df_mon = monthly_means(df_all[[par]], n_min)
+        df_mon = monthly_means(df_all[[par]], n_min, time0, time1)
         if (par != 'co2') & (time1 >= min_date_cams):
-            df_mon[par+'_cams'] = monthly_means(df_all[[par+'_cams']], n_min)
+            df_mon[par+'_cams'] = monthly_means(df_all[[par+'_cams']], n_min, time0, time1)
     else:
         df_mon = df_all[[par]].copy()
         if (par != 'co2') & (time1 >= min_date_cams):
@@ -1407,8 +1417,8 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
             dc[str(iy)+'_n'] = df_year.groupby(df_year.index.hour).count()
             df_year = df_vc[df_vc.index.year==iy]
             vc_year = df_year.groupby(df_year.index.month).std().round(2)
-            n_year = df_year.groupby(df_year.index.month).count()
-            vc_year[n_year<n_min] = np.nan
+            to_nan = df_mon.loc[df_mon.index.year==iy, par].isna().values
+            vc_year[to_nan] = np.nan
             vc[iy] = vc_year
     
     # Wrap everything together and convert to json format for storage
@@ -1982,7 +1992,8 @@ def update_figure_3(points_on, n_years, input_data):
         dc['multiyear'] = dc[list(map(str,years_for_mean))].mean(axis=1).round(2).values
         vc.columns = vc.columns.astype(str)
         vc['multiyear'] = vc[list(map(str,years_for_mean))].mean(axis=1).round(2).values
-    df_mon_new = df_mon[(df_mon.index>=df_test.index[0]) & (df_mon.index<=df_test.index[-1])]
+    df_mon_new = df_mon[(df_mon.index>=df_test.index[0].replace(day=1)) & \
+                        (df_mon.index<=df_test.index[-1])]
     df_mon_sel = df_mon[df_mon.index.year>=firstyear].copy()
     df_mon_my = df_mon_sel[~df_mon_sel.index.isin(df_mon_new.index)].copy()
     sc = df_mon_my[[param]].groupby(df_mon_my.index.month).mean().round(2)
@@ -2220,7 +2231,8 @@ def export_csv_sc(n_clicks, n_years, input_data):
     years = years[years!=targetyear]
     
     # Calculate multiyear average
-    df_mon_new = df_mon[(df_mon.index>=df_test.index[0]) & (df_mon.index<=df_test.index[-1])]
+    df_mon_new = df_mon[(df_mon.index>=df_test.index[0].replace(day=1)) & \
+                        (df_mon.index<=df_test.index[-1])]
     df_mon_sel = df_mon[df_mon.index.year>=firstyear].copy()
     df_mon_my = df_mon_sel[~df_mon_sel.index.isin(df_mon_new.index)].copy()
     sc = df_mon_my[[param]].groupby(df_mon_my.index.month).mean().round(2)
