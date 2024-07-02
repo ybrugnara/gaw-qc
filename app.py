@@ -268,10 +268,10 @@ def parse_data(content, filename, par, tz):
             print('Could not recognize time format')
             return []
     df_up['Time'] = df_up['Time'].dt.round('H') # round to nearest hour
-    if tz != 'UTC':
-        df_up['Time'] = to_utc(df_up['Time'], tz) # convert time to UTC
     df_up.sort_values(['Time'], inplace=True) # sort chronologically
     df_up.set_index('Time', inplace=True)
+    if tz != 'UTC': # convert time to UTC
+        df_up.index = df_up.index.shift(-int(tz[3:6]), freq='H') 
     
     # Deal with decimal separator and missing values
     try:
@@ -283,21 +283,6 @@ def parse_data(content, filename, par, tz):
     df_up['n_meas'] = np.nan
     
     return df_up
-        
-        
-def to_utc(series, tz, reverse=False):
-    """ convert local time to UTC and vice versa
-    :param series: Series of times to be converted
-    :param tz: Local time zone as 'UTC+xx:xx' or 'UTC-xx:xx'
-    :param reverse: Set to True to covert from UTC to local
-    :return: Series of converted times
-    """
-    k = -1 if reverse else 1
-    if tz[3] == '-':    
-        series = series + k*timedelta(hours=int(tz[4:6]), minutes=int(tz[7:9]))
-    elif tz[3] == '+':
-        series = series - k*timedelta(hours=int(tz[4:6]), minutes=int(tz[7:9]))
-    return series
 
 
 def write_log(log_file, row):
@@ -1284,8 +1269,14 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
         df_up = parse_data(content, filename, par, tz)
         if not isinstance(df_up, pd.DataFrame): # file could not be read
             return []
-        time0 = df_up.index[0]
-        time1 = df_up.index[-1]
+        time0 = df_up.index[0]        
+        time1 = df_up.index[-1]      
+        if tz != 'UTC':
+            ltime0 = time0 + timedelta(hours=int(tz[3:6]))
+            ltime1 = time1 + timedelta(hours=int(tz[3:6]))
+        else:
+            ltime0 = time0
+            ltime1 = time1
         is_new = True
         
     # Limit to one year of data (retain most recent year)
@@ -1307,8 +1298,7 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
     
     # Calculate monthly means of uploaded data
     if (res == 'monthly') & (content is not None):
-        df_up = df_up.groupby(pd.Grouper(freq='1M',label='left')).mean()
-        df_up.index = df_up.index + timedelta(days=1)
+        df_up = monthly_means(df_up, n_min, ltime0, ltime1)
             
     # Merge uploaded data with historical data
     if content is not None:
@@ -1321,9 +1311,13 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
     
     # Calculate monthly means of merged data (require at least n_min measurements per month)
     if res == 'hourly':
-        df_mon = monthly_means(df_all[[par]], n_min, time0, time1)
+        df_mon = monthly_means(df_all[[par]], n_min, 
+                               time0 if content is None else ltime0, 
+                               time1 if content is None else ltime1)
         if (par != 'co2') & (time1 >= min_date_cams):
-            df_mon[par+'_cams'] = monthly_means(df_all[[par+'_cams']], n_min, time0, time1)
+            df_mon[par+'_cams'] = monthly_means(df_all[[par+'_cams']], n_min, 
+                                                time0 if content is None else ltime0, 
+                                                time1 if content is None else ltime1)
     else:
         df_mon = df_all[[par]].copy()
         if (par != 'co2') & (time1 >= min_date_cams):
@@ -1396,6 +1390,12 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
     n_meas = n_meas[n_meas.index <= df_test.index[-1]]
     df_monplot['n'] = np.nan
     df_monplot.loc[df_monplot.index.isin(n_meas.index),'n'] = n_meas
+    if content is not None:
+        if time0.month != ltime0.month: # remove first month to forecast when when tz > UTC
+            mtp -= 1
+        elif time1.month != ltime1.month: # remove last month to forecast when when tz < UTC
+            df_monplot.drop(index=df_monplot.index[-1], inplace=True)
+            mtp -= 1
     
     # Prepare data for cycle plots
     years = df_all[par].dropna().index.year.unique()
@@ -1410,6 +1410,9 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
             df_all = shift_year(df_all, df_test)
         df_dc = df_all.loc[(df_all.index.year>=firstyear) & 
                            (df_all.index.dayofyear.isin(df_test.index.dayofyear.unique())), par]
+        if content is not None:
+            if tz != 'UTC': 
+                df_dc.index = df_dc.index.shift(int(tz[3:6]), freq='H') # convert back to local time
         # Calculate diurnal cycle and variability cycle
         for iy in years:
             df_year = df_dc[df_dc.index.year==iy]
@@ -1978,6 +1981,7 @@ def update_figure_3(points_on, n_years, input_data):
         
     df_test = pd.read_json(df_test, orient='columns')
     df_mon = pd.read_json(df_mon, orient='columns')
+    df_monplot = pd.read_json(df_monplot, orient='columns')
     dc = pd.read_json(dc, orient='columns')
     vc = pd.read_json(vc, orient='columns')
      
@@ -1992,8 +1996,7 @@ def update_figure_3(points_on, n_years, input_data):
         dc['multiyear'] = dc[list(map(str,years_for_mean))].mean(axis=1).round(2).values
         vc.columns = vc.columns.astype(str)
         vc['multiyear'] = vc[list(map(str,years_for_mean))].mean(axis=1).round(2).values
-    df_mon_new = df_mon[(df_mon.index>=df_test.index[0].replace(day=1)) & \
-                        (df_mon.index<=df_test.index[-1])]
+    df_mon_new = df_monplot.iloc[-mtp:,:]
     df_mon_sel = df_mon[df_mon.index.year>=firstyear].copy()
     df_mon_my = df_mon_sel[~df_mon_sel.index.isin(df_mon_new.index)].copy()
     sc = df_mon_my[[param]].groupby(df_mon_my.index.month).mean().round(2)
@@ -2129,7 +2132,7 @@ def update_figure_3(points_on, n_years, input_data):
     fig.update_yaxes(title_text=param.upper() + ' mole fraction ' + units,
                       row=1, col=2)
     if res != 'monthly':
-        fig.update_xaxes(title_text='Time UTC', tickformat='%H:%M', row=1, col=1)
+        fig.update_xaxes(title_text='Time ' + 'UTC' if tz is None else tz, tickformat='%H:%M', row=1, col=1)
         fig.update_yaxes(title_text=param.upper() + ' mole fraction ' + units,
                           row=1, col=1)
         fig.update_xaxes(title_text='Month', ticktext=month_names, tickvals=np.arange(1,13), 
@@ -2222,6 +2225,7 @@ def export_csv_sc(n_clicks, n_years, input_data):
     
     df_test = pd.read_json(df_test, orient='columns')
     df_mon = pd.read_json(df_mon, orient='columns')
+    df_monplot = pd.read_json(df_monplot, orient='columns')
     vc = pd.read_json(vc, orient='columns')
     
     # Choose years
@@ -2231,8 +2235,7 @@ def export_csv_sc(n_clicks, n_years, input_data):
     years = years[years!=targetyear]
     
     # Calculate multiyear average
-    df_mon_new = df_mon[(df_mon.index>=df_test.index[0].replace(day=1)) & \
-                        (df_mon.index<=df_test.index[-1])]
+    df_mon_new = df_monplot.iloc[-mtp:,:]
     df_mon_sel = df_mon[df_mon.index.year>=firstyear].copy()
     df_mon_my = df_mon_sel[~df_mon_sel.index.isin(df_mon_new.index)].copy()
     sc = df_mon_my[[param]].groupby(df_mon_my.index.month).mean().round(2)
