@@ -376,22 +376,6 @@ def monthly_means(timeseries, n_min, t0, t1):
     return out
 
 
-def shift_year(df, df_t):
-    """ Deal with periods spanning two calendar years by shifting the data before 01.01 by one year
-    :param df: Data frame with all historical data
-    :param df_t: Data frame with target period
-    :return: Data frame with all historical data and shifted year
-    """
-    lastj = df_t.index.dayofyear[-1]
-    if df_t.index.dayofyear[0] > lastj:
-        new_index = pd.Series(df.index)
-        new_index[df.index.dayofyear>lastj] = \
-            new_index[df.index.dayofyear>lastj] + timedelta(days=365)
-        df.set_index(new_index, inplace=True)
-        
-    return df
-
-
 def forecast_sm(df_m, n, max_l, sel_t): 
     """ make prediction using a SARIMA model
     :param df_m: Data frame with monthly data (one variable and time as index)
@@ -1344,9 +1328,6 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
     else:
         y_pred, y_pred_mon, anom_score = downscaling(df_train, df_test, par, window_size_cams, ml_model)
         y_pred_mon = y_pred_mon[y_pred_mon.index.isin(df_mon.index)]
-        if y_pred_mon.shape[0] > 1:
-            if y_pred.index[0] > y_pred_mon.index[1]-timedelta(days=1): 
-                y_pred_mon = y_pred_mon.iloc[1:] # exclude first month if it has less than one day of data
         y_pred = y_pred.round(2)
         y_pred_mon = y_pred_mon.round(2)
         anom_score_train = anom_score[anom_score.index.isin(df_train.dropna().index)]
@@ -1399,15 +1380,18 @@ def get_data(cod, par, hei, date0, date1, tz, content, filename):
     
     # Prepare data for cycle plots
     years = df_all[par].dropna().index.year.unique()
-    lastyear = df_all[par].dropna().index.year[-1]
+    lastyear = years[-1]
     firstyear = lastyear - n_years_max
     years = years[years >= firstyear]
     dc = pd.DataFrame(columns=years)
     vc = pd.DataFrame(columns=years)
     if res == 'hourly':
-        df_vc = df_all.loc[df_all.index.year>=firstyear, par]
-        if is_new:
-            df_all = shift_year(df_all, df_test)
+        df_vc = df_all.loc[df_all.index.year>=firstyear, par].copy()
+        if df_test.index.year[0] < df_test.index.year[-1]: # shift data before 01.01 by one year to calculate the diurnal cycle by year
+            new_index = pd.Series(df_all.index)
+            lastj = df_test.index.dayofyear[-1]
+            new_index[df_all.index.dayofyear>lastj] = new_index[df_all.index.dayofyear>lastj] + timedelta(days=365)
+            df_all.set_index(new_index, inplace=True)
         df_dc = df_all.loc[(df_all.index.year>=firstyear) & 
                            (df_all.index.dayofyear.isin(df_test.index.dayofyear.unique())), par]
         if content is not None:
@@ -2082,8 +2066,10 @@ def update_figure_3(points_on, n_years, input_data):
     
     # Plot seasonal cycle of variability
     if res != 'monthly':
-        vc_test = vc[str(targetyear)].copy()
-        vc_test[~vc_test.index.isin(df_test.index.month)] = np.nan
+        vc_test = vc.loc[vc.index.isin(df_test.index.month[df_test.index.year==targetyear]), str(targetyear)]
+        if df_test.index.year[0] < df_test.index.year[-1]: # test period is across two calendar years
+            vc_test_add = vc.loc[vc.index.isin(df_test.index.month[df_test.index.year==targetyear-1]), str(targetyear-1)]
+            vc_test = pd.concat([vc_test_add, vc_test]).iloc[-mtp:]
         i_col = len(colors) - len(years_for_mean)
         for iy in years_for_mean:
             if points_on:
@@ -2307,8 +2293,10 @@ def export_csv_vc(n_clicks, n_years, input_data):
     label = 'Your data' if is_new else 'Selected period'
     period_label = 'Mean  ' + str(np.min(years_for_mean)) + '-' + str(np.max(years_for_mean))
     n_years_for_mean = len(years_for_mean)
-    vc_test = vc[str(targetyear)].copy()
-    vc_test[~vc_test.index.isin(df_test.index.month)] = np.nan      
+    vc_test = vc.loc[vc.index.isin(df_test.index.month[df_test.index.year==targetyear]), str(targetyear)]
+    if df_test.index.year[0] < df_test.index.year[-1]: # test period is across two calendar years
+        vc_test_add = vc.loc[vc.index.isin(df_test.index.month[df_test.index.year==targetyear-1]), str(targetyear-1)]
+        vc_test = pd.concat([vc_test_add, vc_test]).iloc[-mtp:]      
     df_exp = pd.DataFrame({'Month':np.arange(1,13), 
                             period_label:vc['multiyear'],
                             label:vc_test})
