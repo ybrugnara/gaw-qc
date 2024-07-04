@@ -280,6 +280,7 @@ def parse_data(content, filename, par, tz):
         print('Could not convert data column to numeric')
         return []
     df_up.loc[df_up[par]<0, par] = np.nan # assign NaN to all negative values
+    df_up = add_missing(df_up) # fill missing periods with NaNs
     df_up['n_meas'] = np.nan
     
     return df_up
@@ -339,19 +340,7 @@ def add_missing(timeseries):
     :param timeseries: Data frame with hourly resolution (time as index)
     :return: Filled in data frame
     """
-    idx = pd.date_range(timeseries.index[0], timeseries.index[-1], freq='H')
-    idx = pd.Series(idx)
-    if timeseries.shape[0] < idx.size:
-        empty_df = pd.DataFrame(np.empty([idx.size,timeseries.shape[1]]))
-        empty_df.columns = timeseries.columns
-        empty_df.index = idx
-        empty_df.iloc[:,:] = np.nan
-        empty_df = empty_df[~empty_df.index.isin(timeseries.index)]
-        out = pd.concat([timeseries, empty_df]).sort_index()
-    else:
-        out = timeseries
-        
-    return out
+    return timeseries.resample('H').asfreq()
 
 
 def monthly_means(timeseries, n_min, t0, t1):
