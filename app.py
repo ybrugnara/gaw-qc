@@ -305,7 +305,6 @@ def aggregate_scores(scores, w_size):
     :param w_size: Window size (integer)
     :return: Series of aggregated scores
     """
-    scores = add_missing(pd.DataFrame(scores))
     added_times = pd.date_range(scores.index[-1]+timedelta(hours=1), 
                                 scores.index[-1]+timedelta(hours=w_size-1), freq='H')
     scores = pd.concat([scores, pd.Series(np.nan,index=added_times)])
@@ -325,11 +324,8 @@ def run_sublof(series, model, win):
     input_data = input_data[~is_nan]
     times = series[:-win+1].index[~is_nan]
     model.fit(input_data)
-    scores = pd.Series(model.decision_scores_, index=times)
-    if is_nan.iloc[0]: # restore initial missing value
-        scores = pd.concat([pd.Series(np.nan,index=series.index[:1]), scores])
-    if is_nan.iloc[-1]: # restore final missing value
-        scores = pd.concat([scores, pd.Series(np.nan,index=series.index[-win:-win+1])])
+    scores = pd.DataFrame(model.decision_scores_, index=times)
+    scores = scores.reindex(series.index)
     scores = aggregate_scores(scores, win)
     
     return scores
