@@ -37,5 +37,6 @@ The GAW programme at Empa is supported by the Federal Office of Meteorology and 
 
 To use the latest full version of GAW-QC visit https://www.empa.ch/gaw.
 
-![](https://github.com/ybrugnara/gaw-qc/blob/main/src/gaw_qc/assets/logos/Logo_Empa.png) ![](https://github.com/ybrugnara/gaw-qc/blob/main/src/gaw_qc/assets/logos/wmp-gaw.png)
+![](https://github.com/ybrugnara/gaw-qc/blob/main/src/gaw_qc/assets/logos/Logo_Empa.png)
+![](https://github.com/ybrugnara/gaw-qc/blob/main/src/gaw_qc/assets/logos/wmo-gaw.png)
 
