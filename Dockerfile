@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG PYTHON_VERSION=3.10.13
+ARG PYTHON_VERSION=3.11
 FROM python:${PYTHON_VERSION}-slim as base
 
 # Prevents Python from writing pyc files.
@@ -10,40 +10,38 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # the application crashes without emitting any logs due to buffering.
 ENV PYTHONUNBUFFERED=1
 
-WORKDIR /app
+WORKDIR /application
 
-COPY ./requirements.txt /app/requirements.txt
-COPY ./test.db /app/test.db
-COPY ./assets /app/assets
 
-# Create a non-privileged user that the app will run under.
-# See https://docs.docker.com/go/dockerfile-user-best-practices/
-#ARG UID=10001
-#RUN adduser \
-#    --disabled-password \
-#    --gecos "" \
-#    --home "/nonexistent" \
-#    --shell "/sbin/nologin" \
-#    --no-create-home \
-#    --uid "${UID}" \
-#    appuser
+RUN mkdir /data
+
 
 # Download dependencies as a separate step to take advantage of Docker's caching.
 # Leverage a cache mount to /root/.cache/pip to speed up subsequent builds.
 # Leverage a bind mount to requirements.txt to avoid having to copy them into
 # into this layer.
+
+COPY pyproject.toml /application/
+
 RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=bind,source=requirements.txt,target=requirements.txt \
-    python -m pip install -r requirements.txt
+    --mount=type=bind,source=/pyproject.toml,target=/application/pyproject.toml \
+    pip install -e .
 
-# Switch to the non-privileged user to run the application.
-#USER appuser
 
-# Copy the source code into the container.
-COPY ./app.py /app/app.py
+COPY src/ /application/
+
+
+RUN mkdir /assets
+COPY src/gaw_qc/assets/css /assets/css
+COPY src/gaw_qc/assets/logos /assets/logos
+COPY src/gaw_qc/assets/favicon.ico /assets/
+RUN mkdir /assets/images
+COPY src/gaw_qc/assets/images/map_gawsis.png /assets/images/
+RUN rm -r gaw_qc/assets
+
 
 # Expose the port that the application listens on.
-EXPOSE 8000
+EXPOSE 80
 
 # Run the application.
-CMD ["python","app.py"]
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:80", "-p", "80", "--timeout", "60", "gaw_qc.wsgi:app"]
