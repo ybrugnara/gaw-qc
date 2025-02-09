@@ -92,7 +92,7 @@ def create_app(
 
     # Set the application to the cache
     cache.init_app(app.server)
-    logger.info(f"Creating app with cache: {cache.config}")
+    logger.debug(f"Creating app with cache: {cache.config}")
 
     # Define some functions
     @app.server.route("/test", methods=["GET"])
@@ -154,7 +154,7 @@ def create_app(
     )
 
     # Set layout of the app by calling the layout factory
-    logger.info("Loading layout")
+    logger.debug("Loading layout")
     app.layout = layout.main_layout(
         "/assets",
         stations,
