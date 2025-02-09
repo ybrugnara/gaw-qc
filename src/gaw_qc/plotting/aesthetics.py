@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 from numpy import linspace
 from matplotlib.pyplot import get_cmap
 from matplotlib.colors import rgb2hex
-from gaw_qc.config.app_config import AppConfig
+from pathlib import Path
 from gaw_qc.models.model_config import ModelSettings
 
 
@@ -166,7 +166,7 @@ class PlotSettings(BaseSettings):
 
 
 def add_logo(
-        fig: go.Figure, x: float, y: float, sx: float, sy: float
+        fig: go.Figure, x: float, y: float, sx: float, sy: float, assets: Path
 ) -> go.Figure:
     """Add Empa logo to a figure
     :param fig: Plotly figure object
@@ -174,12 +174,12 @@ def add_logo(
     :param y: Vertical position as fraction of y axis
     :param sx: Horizonal size as fraction of x axis
     :param sy: Vertical size as fraction of y axis
+    :param assets: Path to assets folder
     :return: Plotly figure object
     """
-    assets_path = AppConfig().assets_path.as_posix()
     fig.add_layout_image(
         dict(
-            source=assets_path + "/logos/Logo_Empa.png",
+            source=(assets / "logos/Logo_Empa.png").as_posix(),
             xref="paper",
             yref="paper",
             x=x,

@@ -156,7 +156,10 @@ def create_app(
     # Set layout of the app by calling the layout factory
     logger.info("Loading layout")
     app.layout = layout.main_layout(
-        stations, read_end_date_cams(engine), read_end_date_gaw(engine)
+        assets_path.as_posix(),
+        stations,
+        read_end_date_cams(engine),
+        read_end_date_gaw(engine)
     )
 
 
@@ -567,7 +570,7 @@ def create_app(
         )
 
         # Add logo Empa
-        fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2)
+        fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2, assets_path)
 
         # Add title, legend, margins
         meta = metadata[metadata["gaw_id"] == cache_data.cod]
@@ -710,7 +713,7 @@ def create_app(
         )
 
         # Add logo Empa
-        fig = add_logo(fig, 0.0, 0.0, 0.1, 0.2)
+        fig = add_logo(fig, 0.0, 0.0, 0.1, 0.2, assets_path)
 
         # Add title, legend, margins
         meta = metadata[metadata["gaw_id"] == cache_data.cod]
@@ -861,10 +864,10 @@ def create_app(
         )
 
         # Add logo Empa
-        fig = add_logo(fig, 0.36, 0.0, 0.075, 0.2)
+        fig = add_logo(fig, 0.36, 0.0, 0.075, 0.2, assets_path)
         if cache_data.res == "hourly":
-            fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2)
-            fig = add_logo(fig, 0.72, 0.0, 0.075, 0.2)
+            fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2, assets_path)
+            fig = add_logo(fig, 0.72, 0.0, 0.075, 0.2, assets_path)
 
         # Add title, legend, margins
         meta = metadata[metadata["gaw_id"] == cache_data.cod]
@@ -1004,19 +1007,24 @@ def create_app(
 
 
 
-# Run app
-if __name__ == "__main__":
+# Define entry point
+def main():
     config = AppConfig()
     parser = ArgumentParser()
     parser.add_argument(
         "-p", "--port", default=8000, type=int, help="Port to listen to"
     )
-    parser.add_argument("-d", "--debug", action="store_true", help="Set debug mode")
     parser.add_argument(
-        "--db", default="/data/gaw.db", type=Path, help="Path to the database file"
+        "-d", "--debug", action="store_false", help="Set debug mode"
     )
-    parser.add_argument("--cache", default="cache", help="Path to the cache directory")
+    parser.add_argument(
+        "--db", default=config.db_path, type=Path, help="Path to the database file"
+    )
+    parser.add_argument(
+        "--assets", default=config.assets_path, help="Path to the assets folder"
+    )
     args = parser.parse_args()
+
     with tempfile.TemporaryDirectory() as cachedir:
         logger.info(f"Cache in {cachedir}")
         cache = Cache(
@@ -1027,9 +1035,14 @@ if __name__ == "__main__":
             }
         )
         db_path: Path = args.db
+        assets_path: Path = args.assets
         prefix = "//" if db_path.is_absolute() else "/"
         logger.info(f"Database path: {db_path.resolve()}")
         engine = create_engine(f"sqlite://{prefix}{str(db_path)}", pool_size=10)
-        app = create_app(engine, cache, config.assets_path, config.theme, config.title)
 
+        app = create_app(engine, cache, assets_path, config.theme, config.title)
         app.run_server(debug=args.debug, port=args.port)
+
+
+if __name__ == "__main__":
+    main()

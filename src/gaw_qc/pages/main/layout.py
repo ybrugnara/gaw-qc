@@ -1,15 +1,13 @@
 from dash import dcc, html
 from dash.development.base_component import Component
-from gaw_qc.config.app_config import AppConfig
 from gaw_qc.pages.components.header import header
 from gaw_qc.pages.components.intro import intro
 from gaw_qc.pages.components.input_form import input_form, lp_switch
 from gaw_qc.pages.components.panels import hourly_panel, monthly_panel, cycles_panel
 
-assets_path = AppConfig().assets_path.as_posix()
-
 
 def main_layout(
+        assets_path: str,
         stations: list[str],
         last_update_cams: str,
         last_update_gaw: str
@@ -21,12 +19,12 @@ def main_layout(
             html.Div(
                 [
                     # Header
-                    header(AppConfig().assets_path.as_posix()),
+                    header(assets_path),
 
                     # Intro
                     html.Div(
                         intro(
-                            AppConfig().assets_path.as_posix(),
+                            assets_path,
                             len(stations),
                             last_update_cams,
                             last_update_gaw
