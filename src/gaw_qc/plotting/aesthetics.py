@@ -4,7 +4,6 @@ from pydantic_settings import BaseSettings
 from numpy import linspace
 from matplotlib.pyplot import get_cmap
 from matplotlib.colors import rgb2hex
-from pathlib import Path
 from gaw_qc.models.model_config import ModelSettings
 
 
@@ -37,6 +36,7 @@ class PlotSettings(BaseSettings):
     line_widths_c: line widths for target year, multi-year mean, other years in the cycle plots
     line_widths_h: line widths for measurements, CAMS, CAMS+ in the hourly plot
     line_widths_m: line widths for measurements, SARIMA in the monthly plot
+    logo_path: path to embedded logo
     margins_figures: margins for each figure in pixels
     marker_flag_h: arguments for hourly flags (colors are set by colors_pie)
     marker_flag_m: arguments for monthly flags
@@ -102,6 +102,8 @@ class PlotSettings(BaseSettings):
 
     line_widths_m: list[float] = [1.5, 1.5]
 
+    logo_path: str = "/assets/logos/Logo_Empa.png"
+
     margins_figures: list[dict[str, int]] = [
         dict(t=75), # figure 1 (hourly)
         dict(t=75), # figure 2 (monthly)
@@ -166,7 +168,7 @@ class PlotSettings(BaseSettings):
 
 
 def add_logo(
-        fig: go.Figure, x: float, y: float, sx: float, sy: float, assets: Path
+        fig: go.Figure, x: float, y: float, sx: float, sy: float
 ) -> go.Figure:
     """Add Empa logo to a figure
     :param fig: Plotly figure object
@@ -174,12 +176,11 @@ def add_logo(
     :param y: Vertical position as fraction of y axis
     :param sx: Horizonal size as fraction of x axis
     :param sy: Vertical size as fraction of y axis
-    :param assets: Path to assets folder
     :return: Plotly figure object
     """
     fig.add_layout_image(
         dict(
-            source=(assets / "logos/Logo_Empa.png").as_posix(),
+            source=PlotSettings().logo_path,
             xref="paper",
             yref="paper",
             x=x,

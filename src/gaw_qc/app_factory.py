@@ -81,7 +81,7 @@ def create_app(
     """
     app = Dash(
         external_stylesheets=[theme],
-        assets_folder=assets_path.as_posix(),
+        assets_folder=assets_path.resolve().as_posix(),
         title=title,
         update_title="Loading...",
     )
@@ -156,7 +156,7 @@ def create_app(
     # Set layout of the app by calling the layout factory
     logger.info("Loading layout")
     app.layout = layout.main_layout(
-        assets_path.as_posix(),
+        "/assets",
         stations,
         read_end_date_cams(engine),
         read_end_date_gaw(engine)
@@ -570,7 +570,7 @@ def create_app(
         )
 
         # Add logo Empa
-        fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2, assets_path)
+        fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2)
 
         # Add title, legend, margins
         meta = metadata[metadata["gaw_id"] == cache_data.cod]
@@ -713,7 +713,7 @@ def create_app(
         )
 
         # Add logo Empa
-        fig = add_logo(fig, 0.0, 0.0, 0.1, 0.2, assets_path)
+        fig = add_logo(fig, 0.0, 0.0, 0.1, 0.2)
 
         # Add title, legend, margins
         meta = metadata[metadata["gaw_id"] == cache_data.cod]
@@ -864,10 +864,10 @@ def create_app(
         )
 
         # Add logo Empa
-        fig = add_logo(fig, 0.36, 0.0, 0.075, 0.2, assets_path)
+        fig = add_logo(fig, 0.36, 0.0, 0.075, 0.2)
         if cache_data.res == "hourly":
-            fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2, assets_path)
-            fig = add_logo(fig, 0.72, 0.0, 0.075, 0.2, assets_path)
+            fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2)
+            fig = add_logo(fig, 0.72, 0.0, 0.075, 0.2)
 
         # Add title, legend, margins
         meta = metadata[metadata["gaw_id"] == cache_data.cod]
@@ -1021,7 +1021,7 @@ def main():
         "--db", default=config.db_path, type=Path, help="Path to the database file"
     )
     parser.add_argument(
-        "--assets", default=config.assets_path, help="Path to the assets folder"
+        "--assets", default=config.assets_path, type=Path, help="Path to the assets folder"
     )
     args = parser.parse_args()
 
