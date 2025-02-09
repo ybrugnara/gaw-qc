@@ -10,7 +10,10 @@ More information is available in the wiki of this repository.
 Once downloaded, the easiest and recommended way to run the app is by using [Docker](https://www.docker.com).
 
 From a terminal go to the directory where the Dockerfile is located an run:
-`docker compose up --build`.
+
+```bash
+docker compose up --build
+```
 
 The application will be available at http://localhost:8000.
 
