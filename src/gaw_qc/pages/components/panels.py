@@ -319,7 +319,7 @@ def monthly_panel() -> Component:
                                     ),
                                     dcc.Download(id="export-csv-monthly"),
                                 ],
-                                style={"padding-left": "30%"},
+                                style={"padding-left": "40%"},
                             ),
                             
                         ],
