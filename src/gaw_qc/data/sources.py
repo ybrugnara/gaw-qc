@@ -14,6 +14,7 @@ from gaw_qc.data.modelling import (
 )
 from gaw_qc.data.preparation import (
     calculate_diurnal,
+    calculate_seasonal,
     calculate_thresholds,
     calculate_variability,
     filter_data,
@@ -540,6 +541,12 @@ def get_data(
         res,
     )
 
+    # Select relevant years for plots
+    years = select_years_for_plots(df_all[par])
+    first_year = years[-1] - model_config.n_years_max
+    years = years[years >= first_year]
+    local_times_plots = local_times[local_times.year.isin(years)]
+
     # Prepare data for monthly plot
     if res == "hourly":
         n_meas = df_test[par].groupby(pd.Grouper(freq="1M", label="left")).count()
@@ -547,41 +554,27 @@ def get_data(
     else:
         n_meas = df_all["n_meas"]
     df_monplot = df_mon[
-        df_mon.index <= local_times[-1]
+        df_mon.index <= local_times_plots[-1]
     ].copy()  # exclude data after target period for monthly plot
-    n_meas = n_meas[n_meas.index <= local_times[-1]]
+    n_meas = n_meas[n_meas.index <= local_times_plots[-1]]
     df_monplot["n"] = np.nan
     df_monplot.loc[df_monplot.index.isin(n_meas.index), "n"] = n_meas
 
-    # Select years for cycle plots
-    years = select_years_for_plots(df_all[par])
-    first_year = years[-1] - model_config.n_years_max
-    years = years[years >= first_year]
+    # Prepare data for cycle plots
+    df_sc = calculate_seasonal(df_mon[par], local_times_plots, years)
 
-    # Rearrange monthly data into a seasonal cycle data frame
-    columns = list(years.drop(local_times.year[-1]).astype(str)) + ["test"]
-    df_sc = pd.DataFrame(columns=columns, index=np.arange(1, 13))
-    for c in columns:
-        if c == "test":
-            df_mon_c = df_mon[
-                (df_mon.index >= local_times[0]) & (df_mon.index <= local_times[-1])
-            ]
-        else:
-            df_mon_c = df_mon[df_mon.index.year == int(c)]
-        df_sc.loc[df_mon_c.index.month, c] = df_mon_c[par].values
-
-    # Calculate diurnal cycle and variability cycle
     df_dc = calculate_diurnal(
         df_all.loc[df_all.index.year >= first_year, par],
-        local_times,
+        local_times_plots,
         tdiff,
         years,
         res,
     )
+
     df_vc = calculate_variability(
         df_all.loc[df_all.index.year >= first_year, par],
         df_sc,
-        local_times,
+        local_times_plots,
         years,
         res,
     )

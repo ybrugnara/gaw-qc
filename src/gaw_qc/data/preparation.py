@@ -327,6 +327,30 @@ def calculate_thresholds(
 
 
 @log_function(logger)
+def calculate_seasonal(
+    data: pd.Series,
+    times: pd.Index, # time index of test period in the original time zone
+    years: pd.Index,
+) -> pd.DataFrame:
+    """
+    Rearrange monthly data into a seasonal cycle data frame
+    """
+    columns = list(years.drop(times.year[-1]).astype(str)) + ["test"]
+    df_sc = pd.DataFrame(columns=columns, index=np.arange(1, 13))
+    for c in columns:
+        if c == "test":
+            data_c = data[
+                (data.index >= times[0].replace(hour=0))
+                & (data.index <= times[-1])
+            ]
+        else:
+            data_c = data[data.index.year == int(c)]
+        df_sc.loc[data_c.index.month, c] = data_c.values
+
+    return df_sc
+
+
+@log_function(logger)
 def calculate_diurnal(
     data: pd.Series,
     times: pd.Index, # time index of test period in the original time zone
@@ -387,7 +411,10 @@ def calculate_variability(
         # Fill in data frame
         for c in columns:
             if c == "test":
-                data_c = data[(data.index >= times[0]) & (data.index <= times[-1])]
+                data_c = data[
+                    (data.index >= times[0].replace(hour=0))
+                    & (data.index <= times[-1])
+                ]
             else:
                 data_c = data[data.index.year == int(c)]
             vc = data_c.groupby(data_c.index.month).std().round(2)
