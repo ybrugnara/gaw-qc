@@ -266,17 +266,20 @@ def get_n_months_to_predict(
 
 
 @log_function(logger)
-def select_years_for_plots(df: pd.Series) -> pd.Index:
+def select_years_for_plots(
+        s: pd.Series, res: Literal["hourly", "monthly"]
+) -> pd.Index:
     """
     Figure out which years are relevant for the plots
     """
-    df_clean = df.dropna()
-    years = df_clean.index.year.unique()
-    # Drop edge years that have less than one day of data
-    if len(df_clean[df_clean.index.year==years[0]]) < 24:
-        years = years[1:]
-    if len(df_clean[df_clean.index.year==years[-1]]) < 24:
-        years = years[:-1]
+    s_clean = s.dropna()
+    years = s_clean.index.year.unique()
+    if res == "hourly":
+        # Drop edge years that have less than one day of data
+        if len(s_clean[s_clean.index.year==years[0]]) < 24:
+            years = years[1:]
+        if len(s_clean[s_clean.index.year==years[-1]]) < 24:
+            years = years[:-1]
 
     return years
 

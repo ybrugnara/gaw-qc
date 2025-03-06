@@ -542,7 +542,7 @@ def get_data(
     )
 
     # Select relevant years for plots
-    years = select_years_for_plots(df_all[par])
+    years = select_years_for_plots(df_all[par], res)
     first_year = years[-1] - model_config.n_years_max
     years = years[years >= first_year]
     local_times_plots = local_times[local_times.year.isin(years)]
