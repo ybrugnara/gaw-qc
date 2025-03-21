@@ -49,26 +49,34 @@ class UserInput:
                 df_up = pd.read_csv(
                     StringIO(decoded.decode("utf-8")),
                     sep=None,
-                    header=None,
-                    skiprows=1,
-                    usecols=[0, 1],
+                    #header=None,
+                    #skiprows=1,
+                    #usecols=[0, 1],
                     quoting=3,
-                    names=["Time", param],
+                    #names=["Time", param],
                     engine="python",
                 )
             else:
                 df_up = pd.read_excel(
                     BytesIO(decoded),
-                    header=None,
-                    skiprows=1,
-                    usecols=[0, 1],
-                    names=["Time", param],
+                    #header=None,
+                    #skiprows=1,
+                    #usecols=[0, 1],
+                    #names=["Time", param],
                 )
         except:
             logger.error("Could not recognize file format of uploaded file")
             return []
-        df_up.replace('"', "", regex=True, inplace=True)  # get rid of quotes
-    
+
+        # Get rid of quotes
+        df_up.replace('"', "", regex=True, inplace=True)
+
+        # Rename columns
+        df_up.rename(
+            columns={df_up.columns[0]: "Time", df_up.columns[1]: param},
+            inplace=True
+        )
+
         # Deal with time format
         fmt = guess_datetime_format(df_up["Time"].iloc[0])
         try:
@@ -91,14 +99,19 @@ class UserInput:
         if self.tz != "UTC":  # convert time to UTC
             df_up.index = df_up.index.shift(-int(self.tz[3:6]), freq="H")
     
-        # Deal with decimal separator and missing values
-        try:
-            df_up[param] = pd.to_numeric(df_up[param].replace(",", ".", regex=True))
-        except:
-            logger.error("Could not convert data column to numeric")
-            return []
-        df_up.loc[df_up[param] < 0, param] = np.nan  # assign NaN to all negative values
-        df_up = df_up.resample('H').asfreq()  # fill missing periods with NaNs
+        # Deal with decimal separator
+        for c in df_up.columns[1:]:
+            try:
+                df_up[c] = pd.to_numeric(df_up[c].replace(",", ".", regex=True))
+            except:
+                logger.error("Could not convert data column to numeric")
+                return []
+
+        # Deal with missing values
+        df_up.loc[df_up[param] < 0, param] = np.nan  # assign NaN to negative values
+        df_up = df_up.resample("H").asfreq()  # fill missing periods with NaN
+
+        # Add empty column for number of measurements
         df_up["n_meas"] = np.nan
     
         return df_up

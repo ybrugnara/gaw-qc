@@ -143,7 +143,7 @@ def hourly_panel() -> Component:
                                         size=200,
                                     ),
                                 ],
-                                style={"padding-left": "10%"},
+                                style={"padding-left": "5%"},
                             ),
                             
                         ],

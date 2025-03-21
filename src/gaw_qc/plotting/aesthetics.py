@@ -25,7 +25,7 @@ class PlotSettings(BaseSettings):
     color_bias: color to highlight periods with bias
     colors_buttons: colors used for large and small buttons
     colors_c: colors used for target year, multi-year mean in the cycle plots
-    colors_h: colors used for measurements, CAMS, CAMS+ in the hourly plot
+    colors_h: colors used for measurements, CAMS, CAMS+, other in the hourly plot
     colors_m: colors used for measurements, SARIMA, CAMS, CAMS+ in the monthly plot
     colors_map: colors used for all stations and the selected station in the map
     colors_pie: colors used for the flags and pie chart
@@ -34,14 +34,14 @@ class PlotSettings(BaseSettings):
     labels_pie: labels for green, yellow, red slices of pie chart
     labels_plot: labels for measurements, CAMS, CAMS+, yellow flags, red flags, SARIMA
     line_widths_c: line widths for target year, multi-year mean, other years in the cycle plots
-    line_widths_h: line widths for measurements, CAMS, CAMS+ in the hourly plot
+    line_widths_h: line widths for measurements, CAMS, CAMS+, other in the hourly plot
     line_widths_m: line widths for measurements, SARIMA in the monthly plot
     logo_path: path to embedded logo
     margins_figures: margins for each figure in pixels
     marker_flag_h: arguments for hourly flags (colors are set by colors_pie)
     marker_flag_m: arguments for monthly flags
     marker_sizes_c: marker sizes for target year, multi-year mean, other years in the cycle plots
-    marker_sizes_h: marker sizes for measurements, CAMS, CAMS+ in the hourly plot
+    marker_sizes_h: marker sizes for measurements, CAMS, CAMS+, other in the hourly plot
     marker_sizes_m: marker sizes for measurements, SARIMA, CAMS, CAMS+ in the monthly plot
     marker_sizes_map: marker sizes for points in the map
     marker_symbols_m: marker symbols for measurements, SARIMA, CAMS, CAMS+ in the monthly plot
@@ -59,7 +59,7 @@ class PlotSettings(BaseSettings):
 
     colors_c: list[str] = ["black", "dimgray"]
 
-    colors_h: list[str] = ["black", "silver", "royalblue"]
+    colors_h: list[str] = ["black", "silver", "royalblue", "magenta"]
 
     colors_m: list[str] = ["black", "skyblue", "silver", "royalblue"]
 
@@ -98,14 +98,14 @@ class PlotSettings(BaseSettings):
 
     line_widths_c: list[float] = [0., 3., 1.]
 
-    line_widths_h: list[float] = [2., .75, 1.5]
+    line_widths_h: list[float] = [2., .75, 1.5, 1.5]
 
     line_widths_m: list[float] = [1.5, 1.5]
 
     logo_path: str = "/assets/logos/Logo_Empa.png"
 
     margins_figures: list[dict[str, int]] = [
-        dict(t=75), # figure 1 (hourly)
+        dict(t=75, r=25), # figure 1 (hourly)
         dict(t=75), # figure 2 (monthly)
         dict(t=75), # figure 3 (cycles)
     ]
@@ -120,7 +120,7 @@ class PlotSettings(BaseSettings):
 
     marker_sizes_c: list[float] = [10., 6., 4.]
 
-    marker_sizes_h: list[float] = [3., 2., 2.5]
+    marker_sizes_h: list[float] = [3., 2., 2.5, 2.5]
 
     marker_sizes_m: list[float] = [8., 10., 8., 11.]
 
@@ -147,7 +147,7 @@ class PlotSettings(BaseSettings):
 
     opacity_hist: float = 0.7
 
-    x_args: dict[str,str|float|int|bool] = dict(
+    x_args: dict[str, str|float|int|bool] = dict(
         tickfont_size=14,
         showline=True,
         linewidth=1.,
@@ -155,7 +155,7 @@ class PlotSettings(BaseSettings):
         mirror=True,
     )
 
-    y_args: dict[str,str|float|int|bool] = dict(
+    y_args: dict[str, str|float|int|bool] = dict(
         tickfont_size=14,
         title_standoff=5,
         showline=True,
@@ -197,17 +197,19 @@ def add_logo(
     return fig
 
 
-def add_message_right(
+def add_message(
         fig: go.Figure,
         msg: str,
         pos: tuple[float, float],
-        color: str
+        color: str,
+        align: str
 ) -> go.Figure:
-    """Add right-aligned message to a plot
+    """Add message to a plot
     :param fig: Plotly figure object
     :param msg: Message
     :param pos: (x,y) coordinates as fractions of plot dimensions
     :param color: Font color
+    :param align: Horizontal alignment
     :return: Plotly figure object
     """
     fig.add_annotation(
@@ -218,7 +220,7 @@ def add_message_right(
         text=msg,
         showarrow=False,
         font=dict(size=10, color=color),
-        xanchor="right",
+        xanchor=align,
     )
 
     return fig

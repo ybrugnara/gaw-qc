@@ -6,7 +6,7 @@ from typing import Literal
 from gaw_qc.data.classes import PlottingData
 from gaw_qc.db.variables import GawVars, GawUnits
 from gaw_qc.models.model_config import ModelSettings
-from gaw_qc.plotting.aesthetics import add_message_right, PlotSettings
+from gaw_qc.plotting.aesthetics import add_message, PlotSettings
 from gaw_qc.plotting.base_plots import empty_subplot
 
 msettings = ModelSettings()
@@ -19,6 +19,7 @@ def plot_hourly(
         param: GawVars,
         use_cams: bool,
         points_on: bool,
+        extra: bool,
         row: int,
         col: int,
 ) -> go.Figure:
@@ -28,6 +29,7 @@ def plot_hourly(
     :param param: Variable code
     :param use_cams: Whether to plot CAMS data
     :param points_on: Whether to plot points instead of lines
+    :param extra: Whether an extra series was uploaded by the user
     :param row: row index for subplots
     :param col: col index for subplots
     :return: Figure object
@@ -61,6 +63,39 @@ def plot_hourly(
             row=row,
             col=col,
         )
+
+    # Plot additionally uploaded series
+    if extra:
+        if points_on:
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=df.iloc[:, 1],
+                    mode="markers",
+                    marker_color=psettings.colors_h[3],
+                    marker_size=psettings.marker_sizes_h[3],
+                    hoverinfo="skip",
+                    name=df.columns[1],
+                ),
+                row=row,
+                col=col,
+                secondary_y=True,
+            )
+        else:
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=df.iloc[:, 1],
+                    mode="lines",
+                    line_color=psettings.colors_h[3],
+                    line_width=psettings.line_widths_h[3],
+                    hoverinfo="skip",
+                    name=df.columns[1],
+                ),
+                row=row,
+                col=col,
+                secondary_y=True,
+            )
     
     # Plot CAMS
     if use_cams:
@@ -161,18 +196,20 @@ def plot_hourly(
 
         # Add message if CAMS data are missing
         if df[param + "_cams"].count() == 0:
-            fig = add_message_right(
+            fig = add_message(
                 fig,
                 msg="(CAMS data not available for the analyzed period)",
-                pos=(0.7, 1.1),
-                color=psettings.colors_h[1]
+                pos=(0, 1.17),
+                color=psettings.colors_h[1],
+                align="left"
             )
         if df["CAMS+"].count() == 0:
-            fig = add_message_right(
+            fig = add_message(
                 fig,
                 msg="(CAMS+ data not available for the analyzed period)",
-                pos=(0.7, 1.06),
-                color=psettings.colors_h[2]
+                pos=(0, 1.13),
+                color=psettings.colors_h[2],
+                align="left"
             )
 
     
@@ -216,6 +253,16 @@ def plot_hourly(
         col=col,
         **psettings.y_args
     )
+    if extra:
+        fig.update_yaxes(
+            title_text=df.columns[1],
+            title_font_color=psettings.colors_h[3],
+            tickfont_color=psettings.colors_h[3],
+            showgrid=False,
+            row=row,
+            col=col,
+            secondary_y=True
+        )
 
     return fig
 
@@ -443,18 +490,20 @@ def plot_monthly(
 
         # Add message if CAMS data are missing
         if df_test[param + "_cams"].count() == 0:
-            fig = add_message_right(
+            fig = add_message(
                 fig,
                 msg="(CAMS data not available for the analyzed period)",
-                pos=(1.01, 1.1),
-                color=psettings.colors_h[1]
+                pos=(-0.1, 1.17),
+                color=psettings.colors_h[1],
+                align="left"
             )
         # if y_pred_mon.count() == 0:
-        #     fig = add_message_right(
+        #     fig = add_message(
         #         fig,
         #         msg="(CAMS+ data not available for the analyzed period)",
-        #         pos=(1.01, 1.06),
-        #         color=psettings.colors_h[2]
+        #         pos=(-0.1, 1.13),
+        #         color=psettings.colors_h[2],
+        #         align="left"
         #     )
 
     # Plot measurements

@@ -135,14 +135,15 @@ def create_app(
 
     @cache.memoize()
     def reprocess_hourly(
+        df_test: pd.DataFrame | None,
         proc_data: ProcessedData,
         cams_on: bool,
         selected_q: int,
-    ) -> pd.DataFrame:
+    ) -> str:
         """
         Cached version of process_hourly
         """
-        return process_hourly(proc_data, cams_on, selected_q)
+        return process_hourly(df_test, proc_data, cams_on, selected_q)
 
     # Read list of stations
     metadata = get_cached_meta(engine)
@@ -522,18 +523,30 @@ def create_app(
             )
 
         # Prepare data for hourly plot
-        df_test_flagged = reprocess_hourly(cache_data, cams_on, selected_q)
+        df_test = pd.read_json(cache_data.test_data, orient="columns")
+        df_test_flagged = reprocess_hourly(
+            df_test, cache_data, cams_on, selected_q
+        )
         df_test_flagged = pd.read_json(df_test_flagged, orient="columns")
+
+        # Check if an extra series was uploaded
+        extra = (
+            ((df_test.shape[1] > 1) & ("CAMS+" not in df_test.columns))
+            | (df_test.shape[1] > 3)
+        )
+        specs_main = (
+            {"secondary_y": True, "rowspan": 2} if extra else {"rowspan": 2}
+        )
 
         # Define plot panels
         fig = make_subplots(
             rows=2,
             cols=2,
-            specs=[[{"rowspan": 2}, {"type": "domain"}], [None, {}]],
+            specs=[[specs_main, {"type": "domain"}], [None, {}]],
             column_widths=[0.75, 0.25],
             row_heights=[0.5, 0.5],
-            horizontal_spacing=0.075,
-            vertical_spacing=0.075,
+            horizontal_spacing=0.1,
+            vertical_spacing=0.1,
             subplot_titles=(" ", "", ""),
         )
 
@@ -551,6 +564,7 @@ def create_app(
             cache_data.par,
             use_cams,
             points_on,
+            extra,
             row=1,
             col=1,
         )
@@ -568,6 +582,10 @@ def create_app(
             row=2,
             col=2,
         )
+
+        # Set domain of pie chart and histogram (avoids huge right margin)
+        fig.update_xaxes(domain=[0.76, 0.99], row=1, col=2)
+        fig.update_xaxes(domain=[0.76, 0.99], row=2, col=2)
 
         # Add logo Empa
         fig = add_logo(fig, 0.0, 0.0, 0.075, 0.2)
@@ -623,7 +641,9 @@ def create_app(
         cache_data = get_cached_data(engine, input_data)
 
         # Get flags
-        test_data_flagged = reprocess_hourly(cache_data, cams_on, selected_q)
+        test_data_flagged = reprocess_hourly(
+            None, cache_data, cams_on, selected_q
+        )
 
         # Create export data
         export, first_date, last_date = export_hourly(

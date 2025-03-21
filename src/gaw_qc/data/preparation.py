@@ -88,42 +88,51 @@ def monthly_means(
 
 @log_function(logger)
 def process_hourly(
+    df_test: pd.DataFrame | None,
     proc_data: ProcessedData,
     cams_on: bool,
     selected_q: int,
-) -> pd.DataFrame:
+) -> str:
     """
     Flag hourly data for plot and export
+    Return a data frame (as json) with the test data and 2 or 3 additional
+    columns for flags
+    (depending on whether cams_on is True and the availability of CAMS data)
     """
     # Read from json
-    df_test = pd.read_json(proc_data.test_data, orient="columns")
-    score_cams = pd.read_json(proc_data.anom_score_cams, orient="index", typ="series")
+    if df_test is None:
+        df_out = pd.read_json(proc_data.test_data, orient="columns")
+    else:
+        df_out = df_test.copy()
+    score_cams = pd.read_json(
+        proc_data.anom_score_cams, orient="index", typ="series"
+    )
     score_lof = pd.read_json(proc_data.anom_score_lof, orient="index")
     thresholds = pd.read_json(proc_data.thresholds, orient="columns")
     param = proc_data.par
 
     # Flag data after Sub-LOF
-    df_test["Flag LOF"] = 0
+    df_out["Flag LOF"] = 0
     thr_yellow = thresholds.loc[selected_q, "LOF"]
     thr_red = thr_yellow * 2
-    flags_yellow = df_test[
+    flags_yellow = df_out[
         (score_lof[0] > thr_yellow) & (score_lof[0] <= thr_red)
     ]
-    flags_red = df_test[score_lof[0] > thr_red]
-    df_test.loc[df_test.index.isin(flags_yellow.index), "Flag LOF"] = 1
+    flags_red = df_out[score_lof[0] > thr_red]
+    df_out.loc[df_out.index.isin(flags_yellow.index), "Flag LOF"] = 1
 
     # Flag extreme outliers that exceed historical records by half the historical range (red flags only)
     flags_red = pd.concat(
         [
             flags_red,
-            df_test[
-                (df_test[param] > thresholds.loc[1, "range upper"])
-                | (df_test[param] < thresholds.loc[1, "range lower"])
+            df_out[
+                (df_out[param] > thresholds.loc[1, "range upper"])
+                | (df_out[param] < thresholds.loc[1, "range lower"])
             ],
         ]
     )
     flags_red = flags_red.groupby(flags_red.index).first()  # drop duplicates
-    df_test.loc[df_test.index.isin(flags_red.index), "Flag LOF"] = 2
+    df_out.loc[df_out.index.isin(flags_red.index), "Flag LOF"] = 2
 
     # Flag data after CAMS (yellow only; two yellow flags [LOF+CAMS] trigger a red flag)
     if (
@@ -132,17 +141,17 @@ def process_hourly(
         (proc_data.time_start >= ModelSettings().min_date_cams) &
         (len(score_cams) > 0)
     ):
-        df_test["Flag CAMS"] = 0
-        anom_score_test = score_cams[score_cams.index.isin(df_test.index)]
+        df_out["Flag CAMS"] = 0
+        anom_score_test = score_cams[score_cams.index.isin(df_out.index)]
         flags_cum_yellow = (
             anom_score_test < thresholds.loc[selected_q, "CAMS lower"]
         ) | (anom_score_test > thresholds.loc[selected_q, "CAMS upper"])
-        flags_cum_yellow = pd.Series(df_test.index[flags_cum_yellow])
+        flags_cum_yellow = pd.Series(df_out.index[flags_cum_yellow])
         # Extend flags to the entire window used by cumulative_score
         for fl in flags_cum_yellow:
             t0 = max(
                 fl - timedelta(hours=ModelSettings().window_size_cams - 1),
-                df_test.index[0],
+                df_out.index[0],
             )
             additional_times = pd.Series(pd.date_range(t0, fl, freq="H"))
             flags_cum_yellow = pd.concat(
@@ -150,14 +159,14 @@ def process_hourly(
             )
         flags_cum_yellow.drop_duplicates(inplace=True)
         flags_cum_yellow.sort_values(inplace=True)
-        df_test.loc[df_test.index.isin(flags_cum_yellow), "Flag CAMS"] = 1
-        df_test.loc[df_test[param].isna(), "Flag CAMS"] = 0
-        df_test["Flag all"] = df_test["Flag LOF"] + df_test["Flag CAMS"]
+        df_out.loc[df_out.index.isin(flags_cum_yellow), "Flag CAMS"] = 1
+        df_out.loc[df_out[param].isna(), "Flag CAMS"] = 0
+        df_out["Flag all"] = df_out["Flag LOF"] + df_out["Flag CAMS"]
     else:
-        df_test["Flag all"] = df_test["Flag LOF"]
+        df_out["Flag all"] = df_out["Flag LOF"]
 
     # Convert to json for caching
-    out = df_test.to_json(date_format="iso", orient="columns")
+    out = df_out.to_json(date_format="iso", orient="columns")
 
     return out
 

@@ -445,7 +445,7 @@ def get_data(
             ]
         # Concatenate data and drop duplicated times (keep the last instance)
         # This guarantees that no data are lost in the merging
-        df_all = pd.concat([df_all, df_up])
+        df_all = pd.concat([df_all, df_up[[par, "n_meas"]]], join="outer")
         df_all = df_all.groupby(df_all.index).last().sort_index()
 
     # Calculate monthly means of merged data
@@ -469,6 +469,7 @@ def get_data(
             df_mon[par + "_cams"] = df_all[par + "_cams"]
 
     # Define test data set
+    test_cols = [par]
     if uinput.content is None:
         df_test = df_all[
             (
@@ -487,6 +488,18 @@ def get_data(
     if df_test[par].count() == 0:
         logger.info("No data available in the target period")
         return None
+
+    # Check if an additional variable was updated and add it to df_test
+    if uinput.content is not None:
+        if df_up.shape[1] > 2:
+            test_cols.append(df_up.columns[1])
+            df_test[df_up.columns[1]] = df_up[df_up.columns[1]]
+
+    # Add CAMS variables if needed
+    if use_cams:
+        test_cols.append(par + "_cams")
+        if res == "hourly":
+            test_cols.append("CAMS+")
 
     # Define training data set
     t_start, t_end = limit_to_max_length(
@@ -580,11 +593,6 @@ def get_data(
     )
 
     # Wrap everything together and convert to json format for storage
-    test_cols = [par]
-    if use_cams:
-        test_cols.append(par + "_cams")
-        if res == "hourly":
-            test_cols.append("CAMS+")
     out = [
         uinput.cod,
         par,
