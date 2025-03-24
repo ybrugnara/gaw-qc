@@ -6,6 +6,7 @@ class GawVars(Enum):
     co = "co"
     co2 = "co2"
     o3 = "o3"
+    n2o = "n2o"
 
 
 class GawUnits(Enum):
@@ -13,6 +14,7 @@ class GawUnits(Enum):
     co = "ppb"
     co2 = "ppm"
     o3 = "ppb"
+    n2o = "ppb"
 
 
 class GawSources(Enum):
@@ -20,3 +22,4 @@ class GawSources(Enum):
     co = "World Data Centre for Greenhouse Gases (WDCGG - gaw.kishou.go.jp)"
     co2 = "World Data Centre for Greenhouse Gases (WDCGG - gaw.kishou.go.jp)"
     o3 = "World Data Centre for Reactive Gases (WDCRG - www.gaw-wdcrg.org)"
+    n2o = "World Data Centre for Greenhouse Gases (WDCGG - gaw.kishou.go.jp)"

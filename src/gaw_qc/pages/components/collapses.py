@@ -41,7 +41,8 @@ def help_hourly() -> dbc.Collapse:
                             " This product can have a large bias and is given just for reference.",
                             " The original 3-hourly resolution was increased to hourly through linear interpolation.",
                             " Note that it is not available before 2020",
-                            " (before March 2024 for CO", html.Sub("2"), ").",
+                            " (before March 2024 for CO", html.Sub("2"), ")",
+                            " and for N", html.Sub("2"), "O.",
                         ]
                     ),
                     html.P(
@@ -184,7 +185,8 @@ def help_monthly() -> dbc.Collapse:
                             " This product can have a large bias and is given just for reference.",
                             " The original 3-hourly resolution was increased to hourly through linear interpolation.",
                             " Note that it is not available before 2020",
-                            " (before March 2024 for CO", html.Sub("2"), ").",
+                            " (before March 2024 for CO", html.Sub("2"), ")",
+                            " and for N", html.Sub("2"), "O.",
                         ]
                     ),
                     html.P(

@@ -48,7 +48,8 @@ class ModelSettings(BaseSettings):
         GawVars.ch4: "value_tc, u10, v10, t2m, bcod, pm10, tcwv",
         GawVars.co: "value_tc, u10, v10, t2m, bcod, mslp, pm10, tcwv",
         GawVars.o3: "value_tc, u10, v10, t2m, bcod, mslp, pm10, tcwv",
-        GawVars.co2: "u10, v10, t2m, bcod, mslp, pm10, tcwv"
+        GawVars.co2: "u10, v10, t2m, bcod, mslp, pm10, tcwv",
+        GawVars.n2o: "",
     }
 
 

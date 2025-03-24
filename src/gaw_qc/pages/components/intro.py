@@ -28,7 +28,7 @@ def intro(
                                     html.P(
                                         [
                                             "On this page you can visualize the measurements of ",
-                                            html.B("methane, carbon dioxide, carbon monoxide, and ozone"),
+                                            html.B("methane, carbon dioxide, carbon monoxide, nitrous oxide and ozone"),
                                             " that are available in the database of the ",
                                             html.B("Global Atmosphere Watch (GAW)"),
                                             " World Data Centres, and compare them with model data by the ",

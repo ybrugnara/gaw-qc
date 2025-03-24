@@ -1,6 +1,6 @@
 [project]
 name = "gaw_qc"
-version = "0.4.2"
+version = "0.5.0"
 requires-python = ">=3.10"
 authors = [
     { name = "Yuri Brugnara", email = "yuri.brugnara@empa.ch" },
