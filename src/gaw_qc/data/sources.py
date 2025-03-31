@@ -489,18 +489,6 @@ def get_data(
         logger.info("No data available in the target period")
         return None
 
-    # Check if an additional variable was updated and add it to df_test
-    if uinput.content is not None:
-        if df_up.shape[1] > 2:
-            test_cols.append(df_up.columns[1])
-            df_test[df_up.columns[1]] = df_up[df_up.columns[1]]
-
-    # Add CAMS variables if needed
-    if use_cams:
-        test_cols.append(par + "_cams")
-        if res == "hourly":
-            test_cols.append("CAMS+")
-
     # Define training data set
     t_start, t_end = limit_to_max_length(
         df_all[par].dropna().index,
@@ -536,6 +524,18 @@ def get_data(
                 df_test["CAMS+"] = np.nan
         else:
             y_pred_mon = debias(df_train, df_test[par + "_cams"], par).round(2)
+
+    # Check if an additional variable was updated and add it to df_test
+    if uinput.content is not None:
+        if df_up.shape[1] > 2:
+            test_cols.append(df_up.columns[1])
+            df_test[df_up.columns[1]] = df_up[df_up.columns[1]]
+
+    # Add CAMS variables to columns to store if needed
+    if use_cams:
+        test_cols.append(par + "_cams")
+        if res == "hourly":
+            test_cols.append("CAMS+")
 
     # Apply Sub-LOF on training and full period
     if res == "hourly":

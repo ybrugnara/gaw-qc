@@ -98,7 +98,7 @@ class PlotSettings(BaseSettings):
 
     line_widths_c: list[float] = [0., 3., 1.]
 
-    line_widths_h: list[float] = [2., .75, 1.5, 1.5]
+    line_widths_h: list[float] = [2., .75, 1.5, 1.]
 
     line_widths_m: list[float] = [1.5, 1.5]
 
@@ -120,7 +120,7 @@ class PlotSettings(BaseSettings):
 
     marker_sizes_c: list[float] = [10., 6., 4.]
 
-    marker_sizes_h: list[float] = [3., 2., 2.5, 2.5]
+    marker_sizes_h: list[float] = [3., 2., 2.5, 2.]
 
     marker_sizes_m: list[float] = [8., 10., 8., 11.]
 
