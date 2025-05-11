@@ -1,6 +1,6 @@
 ![](https://github.com/ybrugnara/gaw-qc/blob/main/src/gaw_qc/assets/logos/gaw-qc_logo.png)
 
-This is an abridged version of the GAW-QC web app developed at [Empa](https://www.empa.ch/gaw).
+This is an abridged version of the [GAW-QC web app](https://www.empa.ch/gaw-qc) developed at [Empa](https://www.empa.ch/gaw).
 
 The app allows the user to upload one csv or xls file with hourly mole fraction measurements made at a Global Atmosphere Watch (GAW) station. One such file is provided in the folder `examples` (note that the timestamps are in UTC). In alternative, one can analyze the historical data available in the database. The main goal is to facilitate the detection of anomalous measurements through data-driven algorithms based on the archives of measurements and numerical forecasts by the Copernicus Atmosphere Monitoring Service (CAMS).
 
@@ -49,8 +49,6 @@ This software was developed at [Empa](https://www.empa.ch) by Yuri Brugnara (Lab
 This repository includes data provided by the [World Data Centre for Greenhouse Gases (WDCGG)](https://gaw.kishou.go.jp) and the [Copernicus Atmosphere Monitoring Service (CAMS)](https://atmosphere.copernicus.eu/).
 
 The GAW programme at Empa is supported by the Federal Office of Meteorology and Climatology MeteoSwiss.
-
-To use the latest full version of GAW-QC visit https://www.empa.ch/gaw.
 
 ![](https://github.com/ybrugnara/gaw-qc/blob/main/src/gaw_qc/assets/logos/Logo_Empa.png)
 ![](https://github.com/ybrugnara/gaw-qc/blob/main/src/gaw_qc/assets/logos/wmo-gaw.png)
